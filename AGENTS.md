@@ -27,13 +27,13 @@ A route handler can return a web `Response`, a `ReadableStream` or an async gene
 
 Nest's packages are ESM only, and this project is ESM too: relative imports end in `.js`, `__dirname` doesn't exist (use `import.meta.dirname`), and tests run on Vitest, so mocks are `vi.fn()`, not `jest.fn()`.
 
-In this project, `src/main.ts` creates the app and listens on `PORT` (3000 by default), `src/app.module.ts` is the root module that imports the others, and `AppController` and `AppService` are samples. Unit tests sit beside the code as `*.spec.ts` and the e2e test is in `test/`; Vitest runs them (`npm test`, `npm run test:e2e`).
+In this project, `src/main.ts` creates the app and listens on `PORT` (3000 by default), `src/modules/app/app.module.ts` is the root module that imports the others, and `AppController` and `AppService` are samples. Unit tests sit beside the code as `*.spec.ts` and the e2e test is in `test/`; Vitest runs them (`npm test`, `npm run test:e2e`).
 
 When a task says how to test, follow it. When it says nothing, cover the behaviour you change with focused tests rather than adding broad e2e suites.
 
 ## Production data: NestJS Observe
 
-This app reports its traces, errors, logs and metrics to [NestJS Observe](https://observe.nestjs.com) through `ObserveModule` in `src/app.module.ts`. Its key pair comes from `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in `.env`, which `npx @nestjs/observe link` writes.
+This app reports its traces, errors, logs and metrics to [NestJS Observe](https://observe.nestjs.com) through `ObserveModule` (created in `src/config/observe.ts`, registered in `src/modules/app/app.module.ts`). Its key pair comes from `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in `.env`, which `npx @nestjs/observe link` writes.
 
 Until `OBSERVE_APP_KEY` is set, in `.env` or in the environment, the app isn't linked and sends no telemetry.
 
@@ -46,4 +46,18 @@ When a task depends on how the app behaves in production - an error users hit, a
 
 ## Project structure
 
-Feature modules live in `src/modules/<feature>/` (module, controller, service and their `*.spec.ts` side by side), never directly in `src/`. Only app-wide files such as `main.ts` and `app.module.ts` sit at the root of `src/`. See `docs/architecture.md`.
+```
+src/
+├── main.ts       # bootstrap only
+├── config/       # app-wide setup: observe.ts, swagger.ts (not Nest modules)
+└── modules/      # every Nest module, one folder each
+    ├── app/      # root AppModule + sample AppController/AppService
+    ├── logger/   # LoggingModule (nestjs-pino)
+    └── <feature>/
+```
+
+- Every Nest module, the root `AppModule` included, lives in `src/modules/<name>/` with its controller, service and `*.spec.ts` side by side. Never put modules directly in `src/`.
+- App-wide setup that isn't a feature goes in `src/config/`.
+- New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
+
+See `docs/architecture.md`.

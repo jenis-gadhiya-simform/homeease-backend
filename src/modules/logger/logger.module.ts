@@ -56,8 +56,13 @@ export function buildLoggerParams(tracer: TracerService): Params {
       return 'info' as const;
     },
     autoLogging: {
+      // Skip probes and the Swagger UI (/docs and its assets).
       ignore: (req: IncomingMessage) =>
-        req.url === '/health' || req.url === '/ready',
+        req.url === '/health' ||
+        req.url === '/ready' ||
+        req.url === '/docs' ||
+        !!req.url?.startsWith('/docs/') ||
+        !!req.url?.startsWith('/docs-json'),
     },
     // Keep request lines short: no headers, body or socket details.
     serializers: {
