@@ -24,6 +24,7 @@
   "dependencies": {
     "@nestjs-redis/client": "^2.0.1",
     "@nestjs-redis/throttler-storage": "^2.0.1",
+    "@nestjs/bullmq": "^12.0.2",
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/observe": "^0.3.0",
@@ -31,7 +32,9 @@
     "@nestjs/swagger": "^12.1.2",
     "@nestjs/terminus": "^12.2.0",
     "@nestjs/throttler": "^6.8.0",
+    "bullmq": "^6.7.8",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
     "nestjs-pino": "^5.3.2",
     "pino": "^10.4.0",
     "pino-http": "^11.0.0",

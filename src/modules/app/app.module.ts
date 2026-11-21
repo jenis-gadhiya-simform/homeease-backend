@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { ObserveModule } from '../../config/observe.js';
+import { SharedQueueModule } from '../../shared/queue/queue.module.js';
 import { SharedRedisModule } from '../../shared/redis/redis.module.js';
 import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
@@ -19,6 +20,8 @@ import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
     }),
     LoggingModule,
     SharedRedisModule,
+    // After ObserveModule, so jobs still running at shutdown are reported.
+    SharedQueueModule,
     HealthModule,
     RateLimitModule,
   ],

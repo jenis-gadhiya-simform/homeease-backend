@@ -51,6 +51,7 @@ src/
 ├── main.ts       # bootstrap only
 ├── config/       # app-wide setup functions: app.setup.ts (helmet), observe.ts, swagger.ts
 ├── shared/       # third-party integrations as shared (usually @Global) modules
+│   ├── queue/    # SharedQueueModule: BullMQ connection + default job options
 │   └── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
 └── modules/      # app modules, one folder each
     ├── app/      # root AppModule + sample AppController/AppService
@@ -63,6 +64,7 @@ src/
 - Every app module, the root `AppModule` included, lives in `src/modules/<name>/` with its controller, service and `*.spec.ts` side by side. Never put modules directly in `src/`.
 - **Third-party integrations** (Redis, and later things like mail, S3, queues or external APIs) go in `src/shared/<integration>/` as a shared module that owns the connection/client and exports it, plus any health indicator for it. Feature modules inject what it exports instead of creating their own clients.
 - App-wide setup that isn't a module goes in `src/config/`.
+- Background jobs use BullMQ through `SharedQueueModule`: a feature module calls `BullModule.registerQueue({ name })`, injects it with `@InjectQueue(name)`, and processes it with a `@Processor(name)` class extending `WorkerHost` in the same module. Jobs retry 3 times by default, so processors must be idempotent; pass a `jobId` derived from the work to avoid duplicates.
 - Local dependencies run with `docker compose up -d` (Redis). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
 

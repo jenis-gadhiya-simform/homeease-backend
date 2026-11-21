@@ -28,6 +28,8 @@ backend/
 │   │   ├── swagger.ts           # OpenAPI document + Swagger UI at /docs
 │   │   └── swagger.spec.ts
 │   ├── shared/                  # Third-party integrations, shared across modules
+│   │   ├── queue/
+│   │   │   └── queue.module.ts  # SharedQueueModule: BullMQ connection + default job options
 │   │   └── redis/
 │   │       ├── redis.module.ts  # SharedRedisModule (@Global): one Redis client for the app
 │   │       └── redis.health.ts  # RedisHealthIndicator (PING) for /ready
@@ -194,6 +196,45 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 - **Startup:** if Redis can't be reached after 5 attempts, the app exits with `Redis unreachable at …` instead of hanging.
 - **Runtime:** after the first connection it reconnects forever with backoff (up to 5s). Commands fail immediately while disconnected (`disableOfflineQueue`) rather than queueing and stalling requests.
 
+### Background jobs (BullMQ)
+
+`SharedQueueModule` (`src/shared/queue/`) configures `@nestjs/bullmq` once for the whole app: the Redis connection (`REDIS_URL`, through ioredis), a key prefix (`QUEUE_PREFIX`), and default job options:
+
+| Option             | Default                       | Why                                                   |
+| ------------------ | ----------------------------- | ----------------------------------------------------- |
+| `attempts`         | 3                             | BullMQ's default is 1 (no retry)                      |
+| `backoff`          | exponential, 1s → 2s → 4s     | Give a failing dependency time to recover             |
+| `removeOnComplete` | keep 1 day, at most 1000 jobs | Without it, every finished job stays in Redis forever |
+| `removeOnFail`     | keep 7 days                   | Long enough to debug failures                         |
+
+It is imported in `AppModule` after `ObserveModule`, so jobs still running at shutdown are reported. On `SIGTERM`, workers finish their active job before the app exits.
+
+**Adding a queue to a feature module:**
+
+```ts
+// src/modules/emails/emails.module.ts
+@Module({
+  imports: [BullModule.registerQueue({ name: 'emails' })],
+  providers: [EmailsService, EmailsProcessor],
+})
+export class EmailsModule {}
+
+// emails.service.ts: producer
+constructor(@InjectQueue('emails') private readonly emails: Queue) {}
+await this.emails.add('welcome', { userId }, { jobId: `welcome:${userId}` });
+
+// emails.processor.ts: consumer
+@Processor('emails')
+export class EmailsProcessor extends WorkerHost {
+  async process(job: Job<{ userId: string }>) { /* send it */ }
+}
+```
+
+- A job can run more than once (retries, a crash mid-job), so make `process()` idempotent.
+- Pass a `jobId` derived from the work (`welcome:${userId}`) so the same job isn't queued twice.
+- Override defaults per queue (`registerQueue({ name, defaultJobOptions })`) or per job (`add(name, data, opts)`).
+- Workers run inside the API process for now. To scale them separately later, start a second entry point that imports only the feature modules with processors.
+
 ### Where to add things
 
 | Need                           | Put it in                                                                                             |
@@ -204,6 +245,7 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 | Configuration / env validation | `@nestjs/config`                                                                                      |
 | Database                       | `@nestjs/typeorm` or `@nestjs/drizzle` in its own module                                              |
 | Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                    |
+| Background job                 | `BullModule.registerQueue()` + a `@Processor` in the feature module (see Background jobs)             |
 | Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator  |
 | API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller |
 
@@ -217,7 +259,8 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 | `OBSERVE_APP_SECRET` | `ObserveModule`                                            | placeholder                             |
 | `LOG_LEVEL`          | pino logger (`LoggingModule`)                              | `info` in production, `debug` otherwise |
 | `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                    | on unless `NODE_ENV=production`         |
-| `REDIS_URL`          | `SharedRedisModule`                                        | `redis://localhost:6379`                |
+| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                   | `redis://localhost:6379`                |
+| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ          | `bull`                                  |
 | `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                          | `60000`                                 |
 | `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route   | `100`                                   |
 | `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP       | unset (don't trust `X-Forwarded-For`)   |
