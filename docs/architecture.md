@@ -28,7 +28,13 @@ backend/
 │   │   ├── observe.ts           # createObserveModule() → ObserveModule + ObserveInstrument
 │   │   ├── swagger.ts           # OpenAPI document + Swagger UI at /docs
 │   │   └── swagger.spec.ts
+│   ├── generated/prisma/        # Prisma client, generated (gitignored)
 │   ├── shared/                  # Third-party integrations, shared across modules
+│   │   ├── database/
+│   │   │   ├── database.module.ts  # DatabaseModule (@Global)
+│   │   │   ├── prisma.service.ts   # PrismaService: one pg pool, fail-fast connect, disconnect on shutdown
+│   │   │   ├── database.health.ts  # SELECT 1 check for /ready
+│   │   │   └── prisma-errors.ts    # isPrismaError(e, PrismaErrorCode.UniqueViolation)
 │   │   ├── mail/
 │   │   │   ├── mail.module.ts   # SharedMailModule: @nestjs/mail transport, templates, default from
 │   │   │   ├── mail-transport.ts # MAIL_TRANSPORT: smtp (default) | log | file
@@ -57,7 +63,11 @@ backend/
 ├── test/
 │   └── app.e2e-spec.ts          # End-to-end test against the full AppModule
 ├── docs/                        # Project documentation (this file)
-├── docker-compose.yml           # Local Redis + Mailpit: docker compose up -d
+├── prisma/
+│   ├── schema.prisma            # Data model
+│   └── migrations/              # SQL migrations (committed)
+├── prisma.config.ts             # Prisma CLI config (schema, migrations, DATABASE_URL)
+├── docker-compose.yml           # Local PostgreSQL (5433) + Redis + Mailpit: docker compose up -d
 ├── .claude/                     # Claude Code commands, hooks and skills
 ├── dist/                        # Build output (nest build) — not committed
 ├── nest-cli.json                # Nest CLI config (sourceRoot: src)
@@ -69,7 +79,7 @@ backend/
 ### Conventions
 
 - **ESM imports:** relative imports end in `.js` (e.g. `import { AppService } from './app.service.js'`), even though the source is `.ts`. There is no `__dirname`; use `import.meta.dirname`.
-- **Every module lives in `src/modules/`**, including the root `AppModule` (`src/modules/app/`). Each feature gets its own folder `src/modules/<feature>/` with `<feature>.module.ts`, `<feature>.controller.ts`, `<feature>.service.ts`, and is imported into `AppModule` (`import { UsersModule } from '../users/users.module.js'`).
+- **Every module lives in `src/modules/`**, including the root `AppModule` (`src/modules/app/`). Each feature gets its own folder `src/modules/<feature>/` with `<feature>.module.ts`, `<feature>.controller.ts`, `<feature>.service.ts`, and is imported into `AppModule` (`import { OrdersModule } from '../orders/orders.module.js'`).
 - **Third-party integrations live in `src/shared/<integration>/`.** A shared module owns the client (connection, config, shutdown), exports it, and provides a health indicator for `/ready`. Feature modules inject it and never create their own clients. Redis is the first one.
 - **App-wide setup lives in `src/config/`** (Helmet, Observe, Swagger, and later things like env validation). Only `main.ts` sits at the root of `src/`.
 - **Scaffolding:** use the `/new-module` Claude command. With the Nest CLI, run `nest g resource modules/<feature> --skip-import` and add the module to `AppModule`'s `imports` yourself. The CLI only looks for a root module in parent folders, so it can't find `src/modules/app/app.module.ts` on its own.
@@ -227,7 +237,7 @@ export class EmailsModule {}
 
 // emails.service.ts: producer
 constructor(@InjectQueue('emails') private readonly emails: Queue) {}
-await this.emails.add('welcome', { userId }, { jobId: `welcome:${userId}` });
+await this.emails.add('welcome', { userId }, { jobId: `welcome-${userId}` });
 
 // emails.processor.ts: consumer
 @Processor('emails')
@@ -237,7 +247,7 @@ export class EmailsProcessor extends WorkerHost {
 ```
 
 - A job can run more than once (retries, a crash mid-job), so make `process()` idempotent.
-- Pass a `jobId` derived from the work (`welcome:${userId}`) so the same job isn't queued twice.
+- Pass a `jobId` derived from the work (`welcome-${userId}`) so the same job isn't queued twice. BullMQ rejects ids containing `:`.
 - Override defaults per queue (`registerQueue({ name, defaultJobOptions })`) or per job (`add(name, data, opts)`).
 - Workers run inside the API process for now. To scale them separately later, start a second entry point that imports only the feature modules with processors.
 
@@ -270,6 +280,38 @@ sequenceDiagram
 
 **Production:** set `SMTP_URL` to your provider (e.g. `smtp://user:pass@smtp.example.com:587`, STARTTLS required) and `MAIL_FROM` to a domain with SPF, DKIM and DMARC set up. `@nestjs/mail` also ships HTTP transports (Resend, Postmark, SendGrid, SES) if you'd rather not use SMTP.
 
+### Database (PostgreSQL + Prisma)
+
+Prisma 7 with the `pg` driver adapter: queries run through node-postgres (one pool per process, size `DATABASE_POOL_MAX`), so NestJS Observe traces them like any `pg` query. The client is generated into `src/generated/prisma` (`npm run db:generate`, also run on `npm install` and before `npm run build`).
+
+- **`DatabaseModule`** (`src/shared/database/`, global) provides `PrismaService`. Startup fails fast with `Database unreachable at host/db: ECONNREFUSED` if Postgres is down. The pool closes on shutdown. `/ready` checks `SELECT 1`.
+- **Schema conventions** (`prisma/schema.prisma`): PascalCase singular models mapped to snake_case tables/columns, UUIDv7 primary keys (time-ordered: good index locality and keyset pagination), `timestamptz(3)` timestamps.
+- **Layering** for a feature module that uses the database (`src/modules/<feature>/`):
+
+| Layer      | File                      | Does                                                              | Never                                |
+| ---------- | ------------------------- | ----------------------------------------------------------------- | ------------------------------------ |
+| Schemas    | `<feature>.schemas.ts`    | Zod input schemas, response types                                 |                                      |
+| Controller | `<feature>.controller.ts` | Validates input, calls one service method, Swagger docs           | Business rules, Prisma               |
+| Service    | `<feature>.service.ts`    | Rules, Nest HTTP exceptions, side effects (e.g. queue an email)   | HTTP details, raw queries            |
+| Repository | `<feature>.repository.ts` | Prisma queries, `select` only exposed fields, optional `tx` param | Return whole rows, throw HTTP errors |
+
+- **Errors:** let the database enforce uniqueness and map the error: `isPrismaError(error, PrismaErrorCode.UniqueViolation)` → 409. Check-then-insert races under concurrent requests.
+- **Transactions:** `await prisma.$transaction(async (tx) => { await repoA.create(a, tx); await repoB.update(b, tx); })`. Repository methods accept `tx`.
+- **Pagination:** keyset (cursor) on the UUIDv7 id: `?limit=20&cursor=<nextCursor>`. Stable and fast at any depth, unlike `OFFSET`.
+- **Side effects after a write** (e.g. queuing an email) run after the insert commits and never fail the request. For a guarantee that they happen exactly when the row commits, use a transactional outbox.
+
+**Migrations workflow**
+
+| Step                                                                                 | Command                                   |
+| ------------------------------------------------------------------------------------ | ----------------------------------------- |
+| Change `prisma/schema.prisma`, then create + apply a migration locally               | `npm run db:migrate -- --name add_orders` |
+| Create a migration without applying it (to edit the SQL first, e.g. a data backfill) | `npm run db:migrate:create -- --name …`   |
+| Apply pending migrations in staging/production (a release step, not at app boot)     | `npm run db:migrate:deploy`               |
+| Check for drift / pending migrations                                                 | `npm run db:migrate:status`               |
+| Browse data                                                                          | `npm run db:studio`                       |
+
+Migrations are committed and never edited once applied anywhere. For zero-downtime deploys, make changes backward-compatible (add a nullable column, deploy, backfill, then add constraints).
+
 ### Where to add things
 
 | Need                           | Put it in                                                                                             |
@@ -282,6 +324,7 @@ sequenceDiagram
 | Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                    |
 | Send an email                  | `EmailService.enqueue()`; new emails: template + `Mailable` + `MAILS` entry (see Email)               |
 | Background job                 | `BullModule.registerQueue()` + a `@Processor` in the feature module (see Background jobs)             |
+| Database table                 | Model in `prisma/schema.prisma` → `npm run db:migrate -- --name …` → repository in the feature module |
 | Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator  |
 | API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller |
 
@@ -301,24 +344,26 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 
 ### Variables
 
-| Variable             | Used by                                                     | Default                                  |
-| -------------------- | ----------------------------------------------------------- | ---------------------------------------- |
-| `PORT`               | `main.ts`                                                   | `3000`                                   |
-| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`    | unset (telemetry off)                    |
-| `OBSERVE_APP_KEY`    | `ObserveModule`                                             | placeholder                              |
-| `OBSERVE_APP_SECRET` | `ObserveModule`                                             | placeholder                              |
-| `LOG_LEVEL`          | pino logger (`LoggingModule`)                               | `info` in production, `debug` otherwise  |
-| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                     | on unless `NODE_ENV=production`          |
-| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                    | `redis://localhost:6379`                 |
-| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ           | `bull`                                   |
-| `MAIL_TRANSPORT`     | `SharedMailModule` — `smtp`, `log` or `file`                | `smtp`                                   |
-| `SMTP_URL`           | `SharedMailModule` — SMTP server                            | `smtp://localhost:1025` (Mailpit)        |
-| `SMTP_STARTTLS`      | `SharedMailModule` — `required` / `opportunistic` / `never` | `required`, `opportunistic` on localhost |
-| `MAIL_FROM`          | `SharedMailModule` — default sender                         | `Backend <no-reply@example.com>`         |
-| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                           | `60000`                                  |
-| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route    | `100`                                    |
-| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP        | unset (don't trust `X-Forwarded-For`)    |
-| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM  | `2000`                                   |
+| Variable             | Used by                                                     | Default                                                                   |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `PORT`               | `main.ts`                                                   | `3000`                                                                    |
+| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`    | unset (telemetry off)                                                     |
+| `OBSERVE_APP_KEY`    | `ObserveModule`                                             | placeholder                                                               |
+| `OBSERVE_APP_SECRET` | `ObserveModule`                                             | placeholder                                                               |
+| `LOG_LEVEL`          | pino logger (`LoggingModule`)                               | `info` in production, `debug` otherwise                                   |
+| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                     | on unless `NODE_ENV=production`                                           |
+| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                    | `redis://localhost:6379`                                                  |
+| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ           | `bull`                                                                    |
+| `MAIL_TRANSPORT`     | `SharedMailModule` — `smtp`, `log` or `file`                | `smtp`                                                                    |
+| `SMTP_URL`           | `SharedMailModule` — SMTP server                            | `smtp://localhost:1025` (Mailpit)                                         |
+| `SMTP_STARTTLS`      | `SharedMailModule` — `required` / `opportunistic` / `never` | `required`, `opportunistic` on localhost                                  |
+| `MAIL_FROM`          | `SharedMailModule` — default sender                         | `Backend <no-reply@example.com>`                                          |
+| `DATABASE_URL`       | `PrismaService`, Prisma CLI — PostgreSQL connection string  | docker Postgres `localhost:5433/homeease-dev`; **required in production** |
+| `DATABASE_POOL_MAX`  | `PrismaService` — max pool connections per process          | `10`                                                                      |
+| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                           | `60000`                                                                   |
+| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route    | `100`                                                                     |
+| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP        | unset (don't trust `X-Forwarded-For`)                                     |
+| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM  | `2000`                                                                    |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 
@@ -329,17 +374,26 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 
 ## Build and run
 
-| Command                           | What it does                                                                             |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `docker compose up -d`            | Start local Redis + Mailpit (Redis is required to run the app and the e2e tests)         |
-| `npm run start:dev`               | Watch mode, loads `.env`                                                                 |
-| `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)   |
-| `npm run start:prod`              | Runs the compiled `dist/main.js`                                                         |
-| `npm test`                        | Unit tests (`**/*.spec.ts`)                                                              |
-| `npm run test:e2e`                | E2E tests (`**/*.e2e-spec.ts`) — boots the full `AppModule` against real Redis over HTTP |
-| `npm run lint` / `npm run format` | oxlint / Prettier                                                                        |
+| Command                           | What it does                                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `docker compose up -d`            | Start local PostgreSQL (port 5433), Redis and Mailpit (required to run the app and e2e tests) |
+| `npm run db:migrate`              | Apply migrations to the dev database (first run, and after pulling schema changes)            |
+| `npm run start:dev`               | Watch mode, loads `.env`                                                                      |
+| `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)        |
+| `npm run start:prod`              | Runs the compiled `dist/main.js`                                                              |
+| `npm test`                        | Unit tests (`**/*.spec.ts`)                                                                   |
+| `npm run test:e2e`                | E2E tests (`**/*.e2e-spec.ts`) — boots the full `AppModule` against real Redis over HTTP      |
+| `npm run lint` / `npm run format` | oxlint / Prettier                                                                             |
 
 ## Testing layers
 
 - **Unit tests** build a small testing module with `Test.createTestingModule({ controllers, providers })` and call methods directly. Dependencies are replaced with `vi.fn()` mocks.
 - **E2E tests** import the real `AppModule`, call `createNestApplication()` and `init()`, and send real HTTP requests through the full pipeline described above.
+- **E2E test data** is isolated from dev data and cleaned up automatically (`vitest.config.e2e.ts` + `test/setup/`):
+
+| Store      | E2E uses                                                   | Before the run                            | After the run (pass or fail)                            |
+| ---------- | ---------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| PostgreSQL | database `homeease-test` (`TEST_DATABASE_URL` to override) | created if missing, migrations applied    | every table truncated (schema + migration history kept) |
+| Redis      | logical database 1 (`TEST_REDIS_URL` to override)          | emptied (leftovers of an interrupted run) | emptied (`FLUSHDB`, never `FLUSHALL`)                   |
+
+Both setups refuse to run against a Postgres database without "test" in its name, or Redis database 0.

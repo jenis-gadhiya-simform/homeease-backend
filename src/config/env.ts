@@ -49,9 +49,32 @@ export const envSchema = z.object({
   SMTP_STARTTLS: z.enum(['required', 'opportunistic', 'never']).optional(),
   MAIL_DIRECTORY: z.string().default('var/mail'),
   MAIL_FROM: z.string().min(3).default('Backend <no-reply@example.com>'),
+
+  // PostgreSQL (Prisma). Local default = docker compose Postgres; required in production.
+  DATABASE_URL: urlWithProtocol('postgresql', 'postgres').optional(),
+  DATABASE_POOL_MAX: positiveInt.max(100).default(10),
 });
 
-export type Env = z.infer<typeof envSchema>;
+const LOCAL_DATABASE_URL =
+  'postgresql://postgres:postgres@localhost:5433/homeease-dev';
+
+/** Cross-field rules and environment-dependent defaults. */
+const appEnvSchema = envSchema
+  .superRefine((value, ctx) => {
+    if (value.NODE_ENV === 'production' && !value.DATABASE_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_URL'],
+        message: 'Required in production',
+      });
+    }
+  })
+  .transform((value) => ({
+    ...value,
+    DATABASE_URL: value.DATABASE_URL ?? LOCAL_DATABASE_URL,
+  }));
+
+export type Env = z.output<typeof appEnvSchema>;
 
 /**
  * Parses an environment. Empty values (`LOG_LEVEL=` in .env) count as unset.
@@ -63,7 +86,7 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
       ([, value]) => value !== undefined && value !== '',
     ),
   );
-  const result = envSchema.safeParse(defined);
+  const result = appEnvSchema.safeParse(defined);
   if (!result.success) {
     throw new Error(
       `Invalid environment variables:\n${z.prettifyError(result.error)}`,

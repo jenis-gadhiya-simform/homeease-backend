@@ -10,7 +10,8 @@ import {
 
 export interface EnqueueEmailOptions {
   /**
-   * Identifies this email so it is queued once, e.g. `welcome:${userId}`.
+   * Identifies this email so it is queued once, e.g. `welcome-${userId}`.
+   * BullMQ rejects ids containing `:`.
    * Queuing again with the same id while the job exists is a no-op.
    */
   jobId?: string;

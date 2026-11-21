@@ -80,4 +80,28 @@ describe('parseEnv', () => {
       'PATH',
     );
   });
+
+  it('defaults DATABASE_URL to the docker Postgres outside production', () => {
+    expect(parseEnv({}).DATABASE_URL).toBe(
+      'postgresql://postgres:postgres@localhost:5433/homeease-dev',
+    );
+  });
+
+  it('requires DATABASE_URL in production', () => {
+    expect(() => parseEnv({ NODE_ENV: 'production' })).toThrow(
+      /DATABASE_URL[\s\S]*Required in production|Required in production[\s\S]*DATABASE_URL/,
+    );
+    expect(
+      parseEnv({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://app:secret@db.internal:5432/homeease',
+      }).DATABASE_URL,
+    ).toBe('postgresql://app:secret@db.internal:5432/homeease');
+  });
+
+  it('rejects a non-Postgres DATABASE_URL', () => {
+    expect(() => parseEnv({ DATABASE_URL: 'mysql://localhost/db' })).toThrow(
+      /DATABASE_URL/,
+    );
+  });
 });

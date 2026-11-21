@@ -1,0 +1,20 @@
+// Prisma schema: https://www.prisma.io/docs/orm/prisma-schema
+//
+// Conventions:
+// - Models are PascalCase singular; tables and columns are snake_case (@@map / @map).
+// - Primary keys are UUIDv7 (time-ordered, so they index and paginate well).
+// - Timestamps are timestamptz with millisecond precision.
+// - After editing: `npm run db:migrate -- --name <change>` (creates + applies a migration).
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}

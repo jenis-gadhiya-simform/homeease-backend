@@ -50,7 +50,9 @@ When a task depends on how the app behaves in production - an error users hit, a
 src/
 ├── main.ts       # bootstrap only
 ├── config/       # app-wide setup: env.ts (validated env), app.setup.ts (helmet, validation pipe), observe.ts, swagger.ts
+├── generated/    # Prisma client (npm run db:generate) — generated, gitignored, never edit
 ├── shared/       # third-party integrations as shared (usually @Global) modules
+│   ├── database/ # DatabaseModule: PrismaService (pg adapter), DatabaseHealthIndicator, prisma-errors
 │   ├── mail/     # SharedMailModule: @nestjs/mail transport, from, templates/ (layout + one file per mail)
 │   ├── queue/    # SharedQueueModule: BullMQ connection + default job options
 │   └── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
@@ -70,7 +72,11 @@ src/
 - Emails are sent through the queue: inject `EmailService` (import `EmailModule`) and call `enqueue('welcome', to, data, { jobId })`. Never call `Mailer.send()` from a request handler. A new email = a template in `src/shared/mail/templates/`, a `Mailable` class in `src/modules/email/mails/`, and an entry in `MAILS` (`email.constants.ts`).
 - Request validation uses Zod with `@Body({ schema })` / `@Query('x', { schema })`; the global `StandardSchemaValidationPipe` is registered in `configureApp()`. Put a feature's schemas in `<feature>.schemas.ts` and derive types with `z.infer`.
 - Configuration: read `env` (or `isProduction`) from `src/config/env.ts`, never `process.env`. A new variable goes into `envSchema` (with a default or `.optional()`), `.env.example`, and the Configuration table in `docs/architecture.md`. Invalid values stop the app at startup with a list of every problem.
-- Local dependencies run with `docker compose up -d` (Redis, plus Mailpit: every email the app sends shows up at http://localhost:8025). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
+- **Database (PostgreSQL + Prisma 7):** schema in `prisma/schema.prisma`, migrations in `prisma/migrations/` (committed). After a schema change run `npm run db:migrate -- --name <change>`; never edit an applied migration. Models are PascalCase singular mapped to snake_case tables/columns (`@@map`/`@map`), ids are `@default(uuid(7)) @db.Uuid`, timestamps `@db.Timestamptz(3)`.
+- **Feature layering:** controller (HTTP only) → service (rules, throws Nest HTTP exceptions) → repository (the only class that uses `PrismaService`). Repositories `select` the fields the API returns and never return whole Prisma rows; their methods take an optional `tx: Prisma.TransactionClient` so services can compose them in `prisma.$transaction(async (tx) => …)`. Map Prisma errors with `isPrismaError(error, PrismaErrorCode.UniqueViolation)` (→ 409) rather than check-then-insert.
+- BullMQ job ids must not contain `:` (use `welcome-${id}`).
+- Local dependencies run with `docker compose up -d`: PostgreSQL on **port 5433** (database `homeease-dev`), Redis, and Mailpit (every email the app sends shows up at http://localhost:8025).
+- E2E tests (`npm run test:e2e`) never touch dev data: they use Postgres database `homeease-test` (created and migrated automatically) and Redis logical database 1. Both are emptied after every run, pass or fail (`test/setup/*.global-setup.ts`). Tests should still clean up what they create between tests (e.g. `deleteMany()` in `beforeEach`).
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
 
 See `docs/architecture.md`.
