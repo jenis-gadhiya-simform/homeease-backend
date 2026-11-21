@@ -11,6 +11,7 @@ This document describes how the backend is put together and how an HTTP request 
 | HTTP adapter  | Express (`@nestjs/platform-express`)                               |
 | Language      | TypeScript (strict, `module: nodenext`, target ES2023)             |
 | Observability | NestJS Observe (`@nestjs/observe`) — traces, errors, logs, metrics |
+| Logging       | pino via `nestjs-pino` (+ `pino-http`, `pino-pretty` in dev)       |
 | Tests         | Vitest + `@nestjs/testing`, Supertest for e2e                      |
 | Lint / format | oxlint (type-aware) / Prettier                                     |
 
@@ -70,11 +71,12 @@ graph TD
 
 ## Application startup
 
-1. `main.ts` calls `NestFactory.create(AppModule, { instrument: ObserveInstrument })`.
+1. `main.ts` calls `NestFactory.create(AppModule, { instrument: ObserveInstrument, bufferLogs: true })`. Startup logs are held until the logger is ready.
 2. Nest scans `AppModule`, resolves its imports, and instantiates providers and controllers through dependency injection (`AppService` is injected into `AppController`'s constructor).
 3. `ObserveModule.forRoot()` initialises telemetry. It is **enabled only when `NODE_ENV === 'production'`** and reads `OBSERVE_APP_KEY` / `OBSERVE_APP_SECRET` from the environment.
-4. Routes are registered on the Express adapter and the app listens on `process.env.PORT` (default `3000`).
-5. `main.ts` uses top-level `await bootstrap()`, which ESM allows.
+4. `LoggingModule` builds the pino logger, and `app.useLogger(app.get(Logger))` makes it Nest's logger and replays the buffered startup logs through it.
+5. Routes are registered on the Express adapter and the app listens on `process.env.PORT` (default `3000`).
+6. `main.ts` uses top-level `await bootstrap()`, which ESM allows.
 
 ## Request flow
 
@@ -123,6 +125,17 @@ If anything in steps 2–8 throws:
 - Any other error becomes `500 Internal Server Error`, and the real error is logged rather than returned to the client.
 - In production, Observe records the error with its trace and logs so it can be investigated in the Observe dashboard.
 
+### Logging
+
+`LoggingModule` (`src/modules/logger/logger.module.ts`) wraps **nestjs-pino** and replaces Nest's logger at startup (`bufferLogs: true` + `app.useLogger(app.get(Logger))` in `main.ts`), so both Nest's own logs and `new Logger(MyService.name)` calls go through pino.
+
+- **Production:** one JSON line per log on stdout, shaped for NestJS Observe: `message`, a string `level`, `context`, and the Observe `traceId` of the request that wrote it. Lines are written through `process.stdout` so Observe's log forwarder sees them.
+- **Development:** readable single-line output through `pino-pretty`.
+- **Request logs:** pino-http logs one `request completed` line per request (`req.id`, method, url, status, `responseTime`). Status 4xx logs at `warn` and 5xx at `error`. `x-request-id` is reused as the request ID when sent. `/health` and `/ready` are not logged.
+- **Redaction:** `authorization`, `cookie`, `set-cookie`, and any `password` / `token` field in logged objects are replaced with `[REDACTED]`. Redaction works on objects only, so never interpolate a secret into the message string.
+
+In services, use Nest's `Logger` with structured params: `private readonly logger = new Logger(OrdersService.name)` then `this.logger.log({ orderId }, 'Order created')`. Put the object **first**: `this.logger.log('Order created', { orderId })` drops the object (it is treated as context).
+
 ### Where to add things
 
 | Need                           | Put it in                                                                          |
@@ -136,12 +149,13 @@ If anything in steps 2–8 throws:
 
 ## Configuration
 
-| Variable             | Used by                                                  | Default               |
-| -------------------- | -------------------------------------------------------- | --------------------- |
-| `PORT`               | `main.ts`                                                | `3000`                |
-| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production` | unset (telemetry off) |
-| `OBSERVE_APP_KEY`    | `ObserveModule`                                          | placeholder           |
-| `OBSERVE_APP_SECRET` | `ObserveModule`                                          | placeholder           |
+| Variable             | Used by                                                  | Default                                 |
+| -------------------- | -------------------------------------------------------- | --------------------------------------- |
+| `PORT`               | `main.ts`                                                | `3000`                                  |
+| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production` | unset (telemetry off)                   |
+| `OBSERVE_APP_KEY`    | `ObserveModule`                                          | placeholder                             |
+| `OBSERVE_APP_SECRET` | `ObserveModule`                                          | placeholder                             |
+| `LOG_LEVEL`          | pino logger (`LoggingModule`)                            | `info` in production, `debug` otherwise |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 
