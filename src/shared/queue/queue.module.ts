@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import type { DefaultJobOptions } from 'bullmq';
+import { env } from '../../config/env.js';
 
 /**
  * Defaults for every job. BullMQ's own defaults are 1 attempt (no retry) and
@@ -31,8 +32,8 @@ export const DEFAULT_JOB_OPTIONS: DefaultJobOptions = {
     BullModule.forRoot({
       // Same Redis as SharedRedisModule; BullMQ opens its own connections
       // (workers need blocking ones), and closes them on shutdown.
-      connection: { url: process.env.REDIS_URL ?? 'redis://localhost:6379' },
-      prefix: process.env.QUEUE_PREFIX ?? 'bull',
+      connection: { url: env.REDIS_URL },
+      prefix: env.QUEUE_PREFIX,
       defaultJobOptions: DEFAULT_JOB_OPTIONS,
     }),
   ],

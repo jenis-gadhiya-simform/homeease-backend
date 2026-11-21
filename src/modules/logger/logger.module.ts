@@ -6,6 +6,7 @@ import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import type { Params } from 'nestjs-pino';
 import { stdTimeFunctions } from 'pino';
 import type { LoggerOptions } from 'pino';
+import { env, isProduction } from '../../config/env.js';
 
 /**
  * Structured logging with pino (via nestjs-pino).
@@ -15,10 +16,8 @@ import type { LoggerOptions } from 'pino';
  * - Development: human-readable output through pino-pretty.
  */
 export function buildLoggerParams(tracer: TracerService): Params {
-  const isProduction = process.env.NODE_ENV === 'production';
-
   const options: LoggerOptions = {
-    level: process.env.LOG_LEVEL ?? (isProduction ? 'info' : 'debug'),
+    level: env.LOG_LEVEL ?? (isProduction ? 'info' : 'debug'),
     // Observe's log parser reads `message` and a string level ("info", "warn"…).
     messageKey: 'message',
     formatters: {

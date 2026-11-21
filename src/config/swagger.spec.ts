@@ -9,7 +9,7 @@ describe('Swagger', () => {
   describe('isSwaggerEnabled', () => {
     it('is on outside production by default', () => {
       expect(isSwaggerEnabled({ NODE_ENV: 'development' })).toBe(true);
-      expect(isSwaggerEnabled({})).toBe(true);
+      expect(isSwaggerEnabled({ NODE_ENV: 'test' })).toBe(true);
     });
 
     it('is off in production by default', () => {
@@ -18,10 +18,10 @@ describe('Swagger', () => {
 
     it('follows SWAGGER_ENABLED when it is set', () => {
       expect(
-        isSwaggerEnabled({ NODE_ENV: 'production', SWAGGER_ENABLED: 'true' }),
+        isSwaggerEnabled({ NODE_ENV: 'production', SWAGGER_ENABLED: true }),
       ).toBe(true);
       expect(
-        isSwaggerEnabled({ NODE_ENV: 'development', SWAGGER_ENABLED: 'false' }),
+        isSwaggerEnabled({ NODE_ENV: 'development', SWAGGER_ENABLED: false }),
       ).toBe(false);
     });
   });

@@ -9,13 +9,15 @@ import { EmailModule } from '../email/email.module.js';
 import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
 import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
+import { env, isProduction } from '../../config/env.js';
 
 @Module({
   imports: [
     ObserveModule.forRoot({
-      enabled: process.env.NODE_ENV === 'production',
-      appKey: process.env.OBSERVE_APP_KEY ?? 'YOUR_APP_KEY',
-      appSecret: process.env.OBSERVE_APP_SECRET ?? 'YOUR_APP_SECRET',
+      enabled: isProduction,
+      // Never fake keys: they would be sent and refused.
+      appKey: env.OBSERVE_APP_KEY ?? '',
+      appSecret: env.OBSERVE_APP_SECRET ?? '',
       serviceId: 'backend',
       // Keep probe traffic out of traces.
       http: { ignore: ['/health', '/ready'] },

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { type Env, env as appEnv } from './env.js';
 
 export const SWAGGER_PATH = 'docs';
 
@@ -10,12 +11,9 @@ export const SWAGGER_PATH = 'docs';
  * SWAGGER_ENABLED is set explicitly ("true" / "false").
  */
 export function isSwaggerEnabled(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Pick<Env, 'NODE_ENV' | 'SWAGGER_ENABLED'> = appEnv,
 ): boolean {
-  if (env.SWAGGER_ENABLED !== undefined) {
-    return env.SWAGGER_ENABLED === 'true';
-  }
-  return env.NODE_ENV !== 'production';
+  return env.SWAGGER_ENABLED ?? env.NODE_ENV !== 'production';
 }
 
 function packageVersion(): string {

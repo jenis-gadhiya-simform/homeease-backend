@@ -23,7 +23,8 @@ backend/
 ├── src/
 │   ├── main.ts                  # Entry point: creates the Nest app and listens on PORT
 │   ├── config/                  # App-wide setup, not modules
-│   │   ├── app.setup.ts         # configureApp(): helmet, trust proxy (used by main.ts + e2e)
+│   │   ├── env.ts               # Zod schema for every env var → typed `env`, validated at startup
+│   │   ├── app.setup.ts         # configureApp(): helmet, validation pipe, trust proxy (used by main.ts + e2e)
 │   │   ├── observe.ts           # createObserveModule() → ObserveModule + ObserveInstrument
 │   │   ├── swagger.ts           # OpenAPI document + Swagger UI at /docs
 │   │   └── swagger.spec.ts
@@ -286,6 +287,20 @@ sequenceDiagram
 
 ## Configuration
 
+All configuration comes from environment variables, validated once at startup by the Zod schema in `src/config/env.ts`. Code reads the typed `env` object (`env.THROTTLE_LIMIT` is a `number`), never `process.env`. Empty values (`LOG_LEVEL=` in `.env`) count as unset. If anything is invalid, the app refuses to start and lists every problem:
+
+```
+Error: Invalid environment variables:
+✖ Invalid input: expected number, received NaN
+  → at PORT
+✖ Invalid URL
+  → at REDIS_URL
+```
+
+To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), to `.env.example`, and to this table.
+
+### Variables
+
 | Variable             | Used by                                                     | Default                                  |
 | -------------------- | ----------------------------------------------------------- | ---------------------------------------- |
 | `PORT`               | `main.ts`                                                   | `3000`                                   |
@@ -306,6 +321,11 @@ sequenceDiagram
 | `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM  | `2000`                                   |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
+
+## Validation
+
+- **Requests:** Zod schemas on the parameter, `@Body({ schema })`, `@Param('id', { schema })` or `@Query('q', { schema })`, checked by the global `StandardSchemaValidationPipe` (`configureApp()`). Invalid input gets `400` with a message per field, e.g. `["to: Invalid email address"]`. `z.object()` strips unknown keys; use `z.strictObject()` to reject them. Zod schemas also appear in the Swagger document automatically.
+- **Environment:** `src/config/env.ts`, above.
 
 ## Build and run
 

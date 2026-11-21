@@ -1,6 +1,7 @@
 import { StandardSchemaValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
+import { env } from './env.js';
 
 /**
  * HTTP-level setup shared by main.ts and the e2e tests, so tests run against
@@ -15,7 +16,7 @@ export function configureApp(app: NestExpressApplication): void {
 
   // Behind a load balancer / reverse proxy, trust its X-Forwarded-For so the
   // rate limiter sees the real client IP. Set TRUST_PROXY to the hop count.
-  if (process.env.TRUST_PROXY) {
-    app.set('trust proxy', Number(process.env.TRUST_PROXY));
+  if (env.TRUST_PROXY !== undefined) {
+    app.set('trust proxy', env.TRUST_PROXY);
   }
 }

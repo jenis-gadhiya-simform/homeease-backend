@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { Module } from '@nestjs/common';
 import { FileTemplateEngine, MailModule } from '@nestjs/mail';
 import { createMailTransport } from './mail-transport.js';
+import { env, isProduction } from '../../config/env.js';
 
 /** Where mail templates live: next to this file in src/, copied to dist/ on build. */
 export const MAIL_TEMPLATES_DIR = join(import.meta.dirname, 'templates');
@@ -19,9 +20,9 @@ export const MAIL_TEMPLATES_DIR = join(import.meta.dirname, 'templates');
         dir: MAIL_TEMPLATES_DIR,
         layout: 'layout',
         // Reread templates on every send outside production, for quick edits.
-        cache: process.env.NODE_ENV === 'production',
+        cache: isProduction,
       }),
-      from: process.env.MAIL_FROM ?? 'Backend <no-reply@example.com>',
+      from: env.MAIL_FROM,
       // Retries happen in the BullMQ email queue, not inside Mailer.send().
       retry: false,
     }),

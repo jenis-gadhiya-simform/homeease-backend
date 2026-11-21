@@ -5,6 +5,7 @@ import { RedisThrottlerStorage } from '@nestjs-redis/throttler-storage';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import type { RedisClientType } from 'redis';
 import { FailOpenThrottlerStorage } from './fail-open-throttler.storage.js';
+import { env } from '../../config/env.js';
 
 /**
  * Global rate limit, counted in Redis so every instance shares the same budget.
@@ -23,8 +24,8 @@ import { FailOpenThrottlerStorage } from './fail-open-throttler.storage.js';
       useFactory: (redis: RedisClientType) => ({
         throttlers: [
           {
-            ttl: Number(process.env.THROTTLE_TTL_MS ?? 60_000),
-            limit: Number(process.env.THROTTLE_LIMIT ?? 100),
+            ttl: env.THROTTLE_TTL_MS,
+            limit: env.THROTTLE_LIMIT,
           },
         ],
         storage: new FailOpenThrottlerStorage(new RedisThrottlerStorage(redis)),

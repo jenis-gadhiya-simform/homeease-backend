@@ -49,7 +49,7 @@ When a task depends on how the app behaves in production - an error users hit, a
 ```
 src/
 ├── main.ts       # bootstrap only
-├── config/       # app-wide setup functions: app.setup.ts (helmet), observe.ts, swagger.ts
+├── config/       # app-wide setup: env.ts (validated env), app.setup.ts (helmet, validation pipe), observe.ts, swagger.ts
 ├── shared/       # third-party integrations as shared (usually @Global) modules
 │   ├── mail/     # SharedMailModule: @nestjs/mail transport, from, templates/ (layout + one file per mail)
 │   ├── queue/    # SharedQueueModule: BullMQ connection + default job options
@@ -68,7 +68,8 @@ src/
 - App-wide setup that isn't a module goes in `src/config/`.
 - Background jobs use BullMQ through `SharedQueueModule`: a feature module calls `BullModule.registerQueue({ name })`, injects it with `@InjectQueue(name)`, and processes it with a `@Processor(name)` class extending `WorkerHost` in the same module. Jobs retry 3 times by default, so processors must be idempotent; pass a `jobId` derived from the work to avoid duplicates.
 - Emails are sent through the queue: inject `EmailService` (import `EmailModule`) and call `enqueue('welcome', to, data, { jobId })`. Never call `Mailer.send()` from a request handler. A new email = a template in `src/shared/mail/templates/`, a `Mailable` class in `src/modules/email/mails/`, and an entry in `MAILS` (`email.constants.ts`).
-- Request validation uses Zod with `@Body({ schema })` / `@Query('x', { schema })`; the global `StandardSchemaValidationPipe` is registered in `configureApp()`.
+- Request validation uses Zod with `@Body({ schema })` / `@Query('x', { schema })`; the global `StandardSchemaValidationPipe` is registered in `configureApp()`. Put a feature's schemas in `<feature>.schemas.ts` and derive types with `z.infer`.
+- Configuration: read `env` (or `isProduction`) from `src/config/env.ts`, never `process.env`. A new variable goes into `envSchema` (with a default or `.optional()`), `.env.example`, and the Configuration table in `docs/architecture.md`. Invalid values stop the app at startup with a list of every problem.
 - Local dependencies run with `docker compose up -d` (Redis, plus Mailpit: every email the app sends shows up at http://localhost:8025). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
 
