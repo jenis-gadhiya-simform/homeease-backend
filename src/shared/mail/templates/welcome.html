@@ -1,0 +1,19 @@
+<h1 style="font-size: 22px; margin: 0 0 16px">Welcome, {{ name }}!</h1>
+<p>Thanks for signing up. Your account is ready.</p>
+{{#if actionUrl}}
+<p style="margin: 24px 0">
+  <a
+    href="{{ actionUrl }}"
+    style="
+      background: #18181b;
+      color: #ffffff;
+      padding: 12px 20px;
+      border-radius: 6px;
+      text-decoration: none;
+      display: inline-block;
+    "
+    >Get started</a
+  >
+</p>
+{{/if}}
+<p>— The Team</p>

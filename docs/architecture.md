@@ -28,6 +28,10 @@ backend/
 │   │   ├── swagger.ts           # OpenAPI document + Swagger UI at /docs
 │   │   └── swagger.spec.ts
 │   ├── shared/                  # Third-party integrations, shared across modules
+│   │   ├── mail/
+│   │   │   ├── mail.module.ts   # SharedMailModule: @nestjs/mail transport, templates, default from
+│   │   │   ├── mail-transport.ts # MAIL_TRANSPORT: smtp (default) | log | file
+│   │   │   └── templates/       # layout.html + <mail>.html / <mail>.txt (copied to dist on build)
 │   │   ├── queue/
 │   │   │   └── queue.module.ts  # SharedQueueModule: BullMQ connection + default job options
 │   │   └── redis/
@@ -39,6 +43,7 @@ backend/
 │       │   ├── app.controller.ts      # Sample controller (GET /)
 │       │   ├── app.service.ts         # Sample service
 │       │   └── app.controller.spec.ts
+│       ├── email/               # EmailModule: mails/, EmailService, EmailProcessor, dev routes
 │       ├── health/              # GET /health, GET /ready (@nestjs/terminus)
 │       ├── logger/
 │       │   └── logger.module.ts # LoggingModule (nestjs-pino)
@@ -51,7 +56,7 @@ backend/
 ├── test/
 │   └── app.e2e-spec.ts          # End-to-end test against the full AppModule
 ├── docs/                        # Project documentation (this file)
-├── docker-compose.yml           # Local Redis: docker compose up -d
+├── docker-compose.yml           # Local Redis + Mailpit: docker compose up -d
 ├── .claude/                     # Claude Code commands, hooks and skills
 ├── dist/                        # Build output (nest build) — not committed
 ├── nest-cli.json                # Nest CLI config (sourceRoot: src)
@@ -235,6 +240,35 @@ export class EmailsProcessor extends WorkerHost {
 - Override defaults per queue (`registerQueue({ name, defaultJobOptions })`) or per job (`add(name, data, opts)`).
 - Workers run inside the API process for now. To scale them separately later, start a second entry point that imports only the feature modules with processors.
 
+### Email
+
+Emails use `@nestjs/mail` and are always sent through the BullMQ `emails` queue, so a slow or failing mail server never blocks a request and failures are retried.
+
+```mermaid
+sequenceDiagram
+    participant S as Any service
+    participant ES as EmailService
+    participant Q as BullMQ "emails" (Redis)
+    participant P as EmailProcessor
+    participant M as Mailer (@nestjs/mail)
+    participant T as SMTP (Mailpit locally)
+    S->>ES: enqueue('welcome', to, data, { jobId })
+    ES->>Q: add job { to, data }
+    Q->>P: process(job)
+    P->>M: send(WelcomeMail, { to, data, retry: false })
+    M->>T: render template + deliver
+```
+
+- **SharedMailModule** (`src/shared/mail/`) configures the transport, default `from` (`MAIL_FROM`) and the `FileTemplateEngine` (`templates/`, wrapped in `layout.html`). Templates use a Handlebars subset: `{{ x }}` is escaped, `{{#if}}`, `{{#each}}`, partials. A `<mail>.txt` file gives the plain-text part; otherwise it is derived from the HTML.
+- **EmailModule** (`src/modules/email/`) holds the mail classes (`mails/`), `EmailService.enqueue()`, and `EmailProcessor`. Transient failures (SMTP 4xx, timeouts, connection refused) are retried with the queue's backoff. Permanent ones (SMTP 5xx, a broken template) fail the job at once.
+- **Locally**, `docker compose up -d` starts **Mailpit**: the app sends to `smtp://localhost:1025` and every email appears in the inbox at **http://localhost:8025**. Nothing leaves your machine.
+- **Dev routes** (not registered in production): `POST /dev/emails/welcome` `{ "to": "you@example.com", "name": "Ada" }` queues a test email; `GET /dev/emails/preview/welcome?name=Ada` renders the template in the browser without sending.
+- **Tests** override `MailTransport` with `InMemoryMailTransport` and use `assertSent({ to, subject })` (see `test/email.e2e-spec.ts`).
+
+**Adding an email:** create `templates/<name>.html` (and optionally `.txt`) in `src/shared/mail/`, a `Mailable` class in `src/modules/email/mails/` whose `render()` returns `{ subject, template: '<name>', context }`, add it to `MAILS` in `email.constants.ts`, then call `emailService.enqueue('<name>', to, data, { jobId })`.
+
+**Production:** set `SMTP_URL` to your provider (e.g. `smtp://user:pass@smtp.example.com:587`, STARTTLS required) and `MAIL_FROM` to a domain with SPF, DKIM and DMARC set up. `@nestjs/mail` also ships HTTP transports (Resend, Postmark, SendGrid, SES) if you'd rather not use SMTP.
+
 ### Where to add things
 
 | Need                           | Put it in                                                                                             |
@@ -245,26 +279,31 @@ export class EmailsProcessor extends WorkerHost {
 | Configuration / env validation | `@nestjs/config`                                                                                      |
 | Database                       | `@nestjs/typeorm` or `@nestjs/drizzle` in its own module                                              |
 | Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                    |
+| Send an email                  | `EmailService.enqueue()`; new emails: template + `Mailable` + `MAILS` entry (see Email)               |
 | Background job                 | `BullModule.registerQueue()` + a `@Processor` in the feature module (see Background jobs)             |
 | Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator  |
 | API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller |
 
 ## Configuration
 
-| Variable             | Used by                                                    | Default                                 |
-| -------------------- | ---------------------------------------------------------- | --------------------------------------- |
-| `PORT`               | `main.ts`                                                  | `3000`                                  |
-| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`   | unset (telemetry off)                   |
-| `OBSERVE_APP_KEY`    | `ObserveModule`                                            | placeholder                             |
-| `OBSERVE_APP_SECRET` | `ObserveModule`                                            | placeholder                             |
-| `LOG_LEVEL`          | pino logger (`LoggingModule`)                              | `info` in production, `debug` otherwise |
-| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                    | on unless `NODE_ENV=production`         |
-| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                   | `redis://localhost:6379`                |
-| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ          | `bull`                                  |
-| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                          | `60000`                                 |
-| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route   | `100`                                   |
-| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP       | unset (don't trust `X-Forwarded-For`)   |
-| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM | `2000`                                  |
+| Variable             | Used by                                                     | Default                                  |
+| -------------------- | ----------------------------------------------------------- | ---------------------------------------- |
+| `PORT`               | `main.ts`                                                   | `3000`                                   |
+| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`    | unset (telemetry off)                    |
+| `OBSERVE_APP_KEY`    | `ObserveModule`                                             | placeholder                              |
+| `OBSERVE_APP_SECRET` | `ObserveModule`                                             | placeholder                              |
+| `LOG_LEVEL`          | pino logger (`LoggingModule`)                               | `info` in production, `debug` otherwise  |
+| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                     | on unless `NODE_ENV=production`          |
+| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                    | `redis://localhost:6379`                 |
+| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ           | `bull`                                   |
+| `MAIL_TRANSPORT`     | `SharedMailModule` — `smtp`, `log` or `file`                | `smtp`                                   |
+| `SMTP_URL`           | `SharedMailModule` — SMTP server                            | `smtp://localhost:1025` (Mailpit)        |
+| `SMTP_STARTTLS`      | `SharedMailModule` — `required` / `opportunistic` / `never` | `required`, `opportunistic` on localhost |
+| `MAIL_FROM`          | `SharedMailModule` — default sender                         | `Backend <no-reply@example.com>`         |
+| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                           | `60000`                                  |
+| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route    | `100`                                    |
+| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP        | unset (don't trust `X-Forwarded-For`)    |
+| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM  | `2000`                                   |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 
@@ -272,7 +311,7 @@ export class EmailsProcessor extends WorkerHost {
 
 | Command                           | What it does                                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `docker compose up -d`            | Start local Redis (required to run the app and the e2e tests)                            |
+| `docker compose up -d`            | Start local Redis + Mailpit (Redis is required to run the app and the e2e tests)         |
 | `npm run start:dev`               | Watch mode, loads `.env`                                                                 |
 | `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)   |
 | `npm run start:prod`              | Runs the compiled `dist/main.js`                                                         |

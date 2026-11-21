@@ -51,10 +51,12 @@ src/
 ├── main.ts       # bootstrap only
 ├── config/       # app-wide setup functions: app.setup.ts (helmet), observe.ts, swagger.ts
 ├── shared/       # third-party integrations as shared (usually @Global) modules
+│   ├── mail/     # SharedMailModule: @nestjs/mail transport, from, templates/ (layout + one file per mail)
 │   ├── queue/    # SharedQueueModule: BullMQ connection + default job options
 │   └── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
 └── modules/      # app modules, one folder each
     ├── app/      # root AppModule + sample AppController/AppService
+    ├── email/    # EmailModule: mail classes, EmailService.enqueue(), "emails" queue processor, dev routes
     ├── health/   # GET /health (liveness), GET /ready (readiness) via @nestjs/terminus
     ├── logger/   # LoggingModule (nestjs-pino)
     ├── rate-limit/ # global ThrottlerGuard, counts stored in Redis
@@ -65,7 +67,9 @@ src/
 - **Third-party integrations** (Redis, and later things like mail, S3, queues or external APIs) go in `src/shared/<integration>/` as a shared module that owns the connection/client and exports it, plus any health indicator for it. Feature modules inject what it exports instead of creating their own clients.
 - App-wide setup that isn't a module goes in `src/config/`.
 - Background jobs use BullMQ through `SharedQueueModule`: a feature module calls `BullModule.registerQueue({ name })`, injects it with `@InjectQueue(name)`, and processes it with a `@Processor(name)` class extending `WorkerHost` in the same module. Jobs retry 3 times by default, so processors must be idempotent; pass a `jobId` derived from the work to avoid duplicates.
-- Local dependencies run with `docker compose up -d` (Redis). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
+- Emails are sent through the queue: inject `EmailService` (import `EmailModule`) and call `enqueue('welcome', to, data, { jobId })`. Never call `Mailer.send()` from a request handler. A new email = a template in `src/shared/mail/templates/`, a `Mailable` class in `src/modules/email/mails/`, and an entry in `MAILS` (`email.constants.ts`).
+- Request validation uses Zod with `@Body({ schema })` / `@Query('x', { schema })`; the global `StandardSchemaValidationPipe` is registered in `configureApp()`.
+- Local dependencies run with `docker compose up -d` (Redis, plus Mailpit: every email the app sends shows up at http://localhost:8025). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
 
 See `docs/architecture.md`.

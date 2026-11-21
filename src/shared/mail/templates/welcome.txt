@@ -1,0 +1,7 @@
+Welcome, {{ name }}!
+
+Thanks for signing up. Your account is ready.
+{{#if actionUrl}}
+Get started: {{ actionUrl }}
+{{/if}}
+— The Team

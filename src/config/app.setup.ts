@@ -1,3 +1,4 @@
+import { StandardSchemaValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 
@@ -8,6 +9,9 @@ import helmet from 'helmet';
 export function configureApp(app: NestExpressApplication): void {
   // Security headers (CSP, HSTS, X-Content-Type-Options, …); also removes X-Powered-By.
   app.use(helmet());
+
+  // Validates every @Body/@Param/@Query that declares a { schema } (Zod); 400 on failure.
+  app.useGlobalPipes(new StandardSchemaValidationPipe());
 
   // Behind a load balancer / reverse proxy, trust its X-Forwarded-For so the
   // rate limiter sees the real client IP. Set TRUST_PROXY to the hop count.
