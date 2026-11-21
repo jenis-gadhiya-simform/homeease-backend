@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { ObserveModule } from '../../config/observe.js';
+import { SharedRedisModule } from '../../shared/redis/redis.module.js';
+import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
+import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
 
 @Module({
   imports: [
@@ -11,8 +14,13 @@ import { LoggingModule } from '../logger/logger.module.js';
       appKey: process.env.OBSERVE_APP_KEY ?? 'YOUR_APP_KEY',
       appSecret: process.env.OBSERVE_APP_SECRET ?? 'YOUR_APP_SECRET',
       serviceId: 'backend',
+      // Keep probe traffic out of traces.
+      http: { ignore: ['/health', '/ready'] },
     }),
     LoggingModule,
+    SharedRedisModule,
+    HealthModule,
+    RateLimitModule,
   ],
   controllers: [AppController],
   providers: [AppService],

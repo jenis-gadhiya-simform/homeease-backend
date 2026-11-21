@@ -49,15 +49,21 @@ When a task depends on how the app behaves in production - an error users hit, a
 ```
 src/
 ├── main.ts       # bootstrap only
-├── config/       # app-wide setup: observe.ts, swagger.ts (not Nest modules)
-└── modules/      # every Nest module, one folder each
+├── config/       # app-wide setup functions: app.setup.ts (helmet), observe.ts, swagger.ts
+├── shared/       # third-party integrations as shared (usually @Global) modules
+│   └── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
+└── modules/      # app modules, one folder each
     ├── app/      # root AppModule + sample AppController/AppService
+    ├── health/   # GET /health (liveness), GET /ready (readiness) via @nestjs/terminus
     ├── logger/   # LoggingModule (nestjs-pino)
+    ├── rate-limit/ # global ThrottlerGuard, counts stored in Redis
     └── <feature>/
 ```
 
-- Every Nest module, the root `AppModule` included, lives in `src/modules/<name>/` with its controller, service and `*.spec.ts` side by side. Never put modules directly in `src/`.
-- App-wide setup that isn't a feature goes in `src/config/`.
+- Every app module, the root `AppModule` included, lives in `src/modules/<name>/` with its controller, service and `*.spec.ts` side by side. Never put modules directly in `src/`.
+- **Third-party integrations** (Redis, and later things like mail, S3, queues or external APIs) go in `src/shared/<integration>/` as a shared module that owns the connection/client and exports it, plus any health indicator for it. Feature modules inject what it exports instead of creating their own clients.
+- App-wide setup that isn't a module goes in `src/config/`.
+- Local dependencies run with `docker compose up -d` (Redis). The app refuses to start if Redis is unreachable, and `npm run test:e2e` needs it running.
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
 
 See `docs/architecture.md`.

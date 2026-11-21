@@ -1,0 +1,40 @@
+import { Controller, Get } from '@nestjs/common';
+import {
+  ApiOkResponse,
+  ApiOperation,
+  ApiServiceUnavailableResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
+import { SkipThrottle } from '@nestjs/throttler';
+import { RedisHealthIndicator } from '../../shared/redis/redis.health.js';
+
+@ApiTags('Health')
+@SkipThrottle()
+@Controller()
+export class HealthController {
+  constructor(
+    private readonly health: HealthCheckService,
+    private readonly redis: RedisHealthIndicator,
+  ) {}
+
+  /** Liveness: the process is up. Never touches dependencies. */
+  @Get('health')
+  @ApiOperation({ summary: 'Liveness probe' })
+  @ApiOkResponse({ schema: { example: { status: 'ok' } } })
+  live() {
+    return { status: 'ok' };
+  }
+
+  /** Readiness: hard dependencies answer. 503 when any check fails or during shutdown. */
+  @Get('ready')
+  @HealthCheck()
+  @ApiOperation({ summary: 'Readiness probe (checks Redis)' })
+  @ApiOkResponse({ description: 'All dependencies are up' })
+  @ApiServiceUnavailableResponse({
+    description: 'A dependency is down, or the app is shutting down',
+  })
+  ready() {
+    return this.health.check([() => this.redis.isHealthy('redis')]);
+  }
+}

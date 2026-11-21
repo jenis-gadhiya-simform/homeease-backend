@@ -22,18 +22,25 @@ This document describes how the backend is put together and how an HTTP request 
 backend/
 ├── src/
 │   ├── main.ts                  # Entry point: creates the Nest app and listens on PORT
-│   ├── config/                  # App-wide setup, not features
+│   ├── config/                  # App-wide setup, not modules
+│   │   ├── app.setup.ts         # configureApp(): helmet, trust proxy (used by main.ts + e2e)
 │   │   ├── observe.ts           # createObserveModule() → ObserveModule + ObserveInstrument
 │   │   ├── swagger.ts           # OpenAPI document + Swagger UI at /docs
 │   │   └── swagger.spec.ts
-│   └── modules/                 # Every Nest module lives here
+│   ├── shared/                  # Third-party integrations, shared across modules
+│   │   └── redis/
+│   │       ├── redis.module.ts  # SharedRedisModule (@Global): one Redis client for the app
+│   │       └── redis.health.ts  # RedisHealthIndicator (PING) for /ready
+│   └── modules/                 # App modules
 │       ├── app/
 │       │   ├── app.module.ts    # Root module: wires Observe, logging + feature modules
 │       │   ├── app.controller.ts      # Sample controller (GET /)
 │       │   ├── app.service.ts         # Sample service
 │       │   └── app.controller.spec.ts
+│       ├── health/              # GET /health, GET /ready (@nestjs/terminus)
 │       ├── logger/
 │       │   └── logger.module.ts # LoggingModule (nestjs-pino)
+│       ├── rate-limit/          # RateLimitModule: global ThrottlerGuard, Redis storage
 │       └── <feature>/
 │           ├── <feature>.module.ts
 │           ├── <feature>.controller.ts
@@ -42,6 +49,7 @@ backend/
 ├── test/
 │   └── app.e2e-spec.ts          # End-to-end test against the full AppModule
 ├── docs/                        # Project documentation (this file)
+├── docker-compose.yml           # Local Redis: docker compose up -d
 ├── .claude/                     # Claude Code commands, hooks and skills
 ├── dist/                        # Build output (nest build) — not committed
 ├── nest-cli.json                # Nest CLI config (sourceRoot: src)
@@ -54,7 +62,8 @@ backend/
 
 - **ESM imports:** relative imports end in `.js` (e.g. `import { AppService } from './app.service.js'`), even though the source is `.ts`. There is no `__dirname`; use `import.meta.dirname`.
 - **Every module lives in `src/modules/`**, including the root `AppModule` (`src/modules/app/`). Each feature gets its own folder `src/modules/<feature>/` with `<feature>.module.ts`, `<feature>.controller.ts`, `<feature>.service.ts`, and is imported into `AppModule` (`import { UsersModule } from '../users/users.module.js'`).
-- **App-wide setup lives in `src/config/`** (Observe, Swagger, and later things like env validation). Only `main.ts` sits at the root of `src/`.
+- **Third-party integrations live in `src/shared/<integration>/`.** A shared module owns the client (connection, config, shutdown), exports it, and provides a health indicator for `/ready`. Feature modules inject it and never create their own clients. Redis is the first one.
+- **App-wide setup lives in `src/config/`** (Helmet, Observe, Swagger, and later things like env validation). Only `main.ts` sits at the root of `src/`.
 - **Scaffolding:** use the `/new-module` Claude command. With the Nest CLI, run `nest g resource modules/<feature> --skip-import` and add the module to `AppModule`'s `imports` yourself. The CLI only looks for a root module in parent folders, so it can't find `src/modules/app/app.module.ts` on its own.
 - **Tests beside code:** unit tests are `*.spec.ts` next to the file they test; e2e tests are `test/*.e2e-spec.ts`.
 
@@ -116,17 +125,17 @@ sequenceDiagram
     E-->>C: 200 OK, "Hello World!"
 ```
 
-| #   | Stage                  | Purpose                                                           | In this project today                      |
-| --- | ---------------------- | ----------------------------------------------------------------- | ------------------------------------------ |
-| 1   | HTTP adapter (Express) | Parses the raw request                                            | Default Express adapter                    |
-| 2   | Middleware             | Cross-cutting request work (CORS, request IDs, logging)           | None registered                            |
-| 3   | Guards                 | Authentication / authorization — can reject with 401/403          | None registered                            |
-| 4   | Interceptors (before)  | Wrap the handler: timing, caching, transforming                   | Observe instrumentation traces the request |
-| 5   | Pipes                  | Validate and transform `@Body`, `@Param`, `@Query`                | None registered                            |
-| 6   | Route handler          | Controller method selected by `@Controller` + `@Get`/`@Post` path | `AppController.getHello()` on `GET /`      |
-| 7   | Service / providers    | Business logic, injected via DI                                   | `AppService.getHello()`                    |
-| 8   | Interceptors (after)   | Map or wrap the handler's result                                  | None registered                            |
-| 9   | Exception filters      | Turn thrown errors into HTTP responses                            | Nest's built-in global filter              |
+| #   | Stage                  | Purpose                                                           | In this project today                                |
+| --- | ---------------------- | ----------------------------------------------------------------- | ---------------------------------------------------- |
+| 1   | HTTP adapter (Express) | Parses the raw request                                            | Default Express adapter                              |
+| 2   | Middleware             | Cross-cutting request work (CORS, request IDs, logging)           | `helmet` security headers; pino-http request logging |
+| 3   | Guards                 | Authentication / authorization / rate limiting                    | `ThrottlerGuard` (global): 429 over the limit        |
+| 4   | Interceptors (before)  | Wrap the handler: timing, caching, transforming                   | Observe instrumentation traces the request           |
+| 5   | Pipes                  | Validate and transform `@Body`, `@Param`, `@Query`                | None registered                                      |
+| 6   | Route handler          | Controller method selected by `@Controller` + `@Get`/`@Post` path | `AppController.getHello()` on `GET /`                |
+| 7   | Service / providers    | Business logic, injected via DI                                   | `AppService.getHello()`                              |
+| 8   | Interceptors (after)   | Map or wrap the handler's result                                  | None registered                                      |
+| 9   | Exception filters      | Turn thrown errors into HTTP responses                            | Nest's built-in global filter                        |
 
 ### Error handling
 
@@ -156,6 +165,35 @@ In services, use Nest's `Logger` with structured params: `private readonly logge
 
 It is served everywhere except production. Set `SWAGGER_ENABLED=true` or `false` to override. Bearer auth is pre-declared, so endpoints marked `@ApiBearerAuth()` get an "Authorize" button. Request bodies and params validated with Zod 4.2+ (`@Body({ schema })`) appear in the document automatically. Document each response status with `@ApiOkResponse()`, `@ApiCreatedResponse()` or `@ApiResponse({ status, description })`.
 
+### Health checks
+
+| Route         | Purpose                                                 | Answers                                 |
+| ------------- | ------------------------------------------------------- | --------------------------------------- |
+| `GET /health` | Liveness: the process is up. Never checks dependencies. | `200 {"status":"ok"}`                   |
+| `GET /ready`  | Readiness: Redis answers `PING` within 1s.              | `200` when up, `503` when Redis is down |
+
+Both are excluded from rate limiting, request logs and Observe traces. On `SIGTERM`, `/ready` answers `503 {"status":"shutting_down"}` for `SHUTDOWN_GRACE_MS` so the load balancer stops sending traffic, then Nest closes Redis and exits. Add a check for each new hard dependency (e.g. the database) to `HealthController.ready()`, with its indicator in that dependency's shared module.
+
+### Rate limiting
+
+`RateLimitModule` registers `ThrottlerGuard` globally: by default **100 requests per minute per client IP, per route**. Counts are stored in Redis through `@nestjs-redis/throttler-storage`, so every instance shares one budget. Over the limit, the response is `429` with `Retry-After` (seconds).
+
+- `@SkipThrottle()` opts a controller or route out. `@Throttle({ default: { limit: 5, ttl: 60_000 } })` tightens one route.
+- **Fails open:** if Redis errors, the request is allowed and the error logged (`FailOpenThrottlerStorage`), so a Redis outage doesn't take the API down. `/ready` reports Redis down at the same time.
+- Behind a load balancer, set `TRUST_PROXY` (hop count) or every client shares the proxy's IP.
+- When authentication is added, import `RateLimitModule` **after** it and track by user (see the comment in `rate-limit.module.ts`).
+
+### Security headers
+
+`configureApp()` (`src/config/app.setup.ts`) applies `helmet()`: Content-Security-Policy, HSTS, `X-Content-Type-Options: nosniff`, `X-Frame-Options`, and removes `X-Powered-By`. Swagger UI works under the default CSP because it loads only same-origin scripts.
+
+### Redis
+
+`SharedRedisModule` (`src/shared/redis/`) opens one Redis client at startup (`REDIS_URL`) and closes it on shutdown. It is global: inject the client with `@InjectRedis()` from `@nestjs-redis/client`.
+
+- **Startup:** if Redis can't be reached after 5 attempts, the app exits with `Redis unreachable at …` instead of hanging.
+- **Runtime:** after the first connection it reconnects forever with backoff (up to 5s). Commands fail immediately while disconnected (`disableOfflineQueue`) rather than queueing and stalling requests.
+
 ### Where to add things
 
 | Need                           | Put it in                                                                                             |
@@ -165,32 +203,39 @@ It is served everywhere except production. Set `SWAGGER_ENABLED=true` or `false`
 | Authentication                 | A global guard via `@nestjs/authentication` (`@Public()` to opt routes out)                           |
 | Configuration / env validation | `@nestjs/config`                                                                                      |
 | Database                       | `@nestjs/typeorm` or `@nestjs/drizzle` in its own module                                              |
-| Rate limiting                  | `@nestjs/throttler`                                                                                   |
+| Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                    |
+| Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator  |
 | API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller |
 
 ## Configuration
 
-| Variable             | Used by                                                  | Default                                 |
-| -------------------- | -------------------------------------------------------- | --------------------------------------- |
-| `PORT`               | `main.ts`                                                | `3000`                                  |
-| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production` | unset (telemetry off)                   |
-| `OBSERVE_APP_KEY`    | `ObserveModule`                                          | placeholder                             |
-| `OBSERVE_APP_SECRET` | `ObserveModule`                                          | placeholder                             |
-| `LOG_LEVEL`          | pino logger (`LoggingModule`)                            | `info` in production, `debug` otherwise |
-| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                  | on unless `NODE_ENV=production`         |
+| Variable             | Used by                                                    | Default                                 |
+| -------------------- | ---------------------------------------------------------- | --------------------------------------- |
+| `PORT`               | `main.ts`                                                  | `3000`                                  |
+| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`   | unset (telemetry off)                   |
+| `OBSERVE_APP_KEY`    | `ObserveModule`                                            | placeholder                             |
+| `OBSERVE_APP_SECRET` | `ObserveModule`                                            | placeholder                             |
+| `LOG_LEVEL`          | pino logger (`LoggingModule`)                              | `info` in production, `debug` otherwise |
+| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                    | on unless `NODE_ENV=production`         |
+| `REDIS_URL`          | `SharedRedisModule`                                        | `redis://localhost:6379`                |
+| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                          | `60000`                                 |
+| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route   | `100`                                   |
+| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP       | unset (don't trust `X-Forwarded-For`)   |
+| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM | `2000`                                  |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 
 ## Build and run
 
-| Command                           | What it does                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `npm run start:dev`               | Watch mode, loads `.env`                                                                          |
-| `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)            |
-| `npm run start:prod`              | Runs the compiled `dist/main.js`                                                                  |
-| `npm test`                        | Unit tests (`**/*.spec.ts`)                                                                       |
-| `npm run test:e2e`                | E2E tests (`**/*.e2e-spec.ts`) — boots the full `AppModule` and calls it over HTTP with Supertest |
-| `npm run lint` / `npm run format` | oxlint / Prettier                                                                                 |
+| Command                           | What it does                                                                             |
+| --------------------------------- | ---------------------------------------------------------------------------------------- |
+| `docker compose up -d`            | Start local Redis (required to run the app and the e2e tests)                            |
+| `npm run start:dev`               | Watch mode, loads `.env`                                                                 |
+| `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)   |
+| `npm run start:prod`              | Runs the compiled `dist/main.js`                                                         |
+| `npm test`                        | Unit tests (`**/*.spec.ts`)                                                              |
+| `npm run test:e2e`                | E2E tests (`**/*.e2e-spec.ts`) — boots the full `AppModule` against real Redis over HTTP |
+| `npm run lint` / `npm run format` | oxlint / Prettier                                                                        |
 
 ## Testing layers
 
