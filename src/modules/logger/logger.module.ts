@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { Module } from '@nestjs/common';
 import { TracerService } from '@nestjs/observe';
@@ -7,6 +6,7 @@ import type { Params } from 'nestjs-pino';
 import { stdTimeFunctions } from 'pino';
 import type { LoggerOptions } from 'pino';
 import { env, isProduction } from '../../config/env.js';
+import { resolveRequestId } from '../../shared/context/request-context.js';
 
 /**
  * Structured logging with pino (via nestjs-pino).
@@ -36,6 +36,10 @@ export function buildLoggerParams(tracer: TracerService): Params {
         'res.headers["set-cookie"]',
         '*.password',
         '*.token',
+        '*.accessToken',
+        '*.refreshToken',
+        '*.currentPassword',
+        '*.newPassword',
       ],
       censor: '[REDACTED]',
     },
@@ -43,8 +47,8 @@ export function buildLoggerParams(tracer: TracerService): Params {
 
   const httpOptions = {
     ...options,
-    genReqId: (req: IncomingMessage) =>
-      (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
+    // Same id as RequestContext, the X-Request-Id header and error bodies.
+    genReqId: (req: IncomingMessage) => resolveRequestId(req),
     customLogLevel: (
       _req: IncomingMessage,
       res: { statusCode: number },

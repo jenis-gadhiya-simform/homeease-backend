@@ -2,6 +2,8 @@
 
 **Phase:** 1 (table + booking hooks) / 2 (API) · **Modules:** 1.13 Audit · **Depends on:** F00 request context
 
+**Status:** 🚧 In progress — the `audit_log` table, append-only grants for the app role, RLS and `AuditService.record(tx, …)` were built with F01 (see [F01 summary](./F01-tenancy.md#implementation-summary-v1)). Still to do: the API, the update-rejecting trigger, retention.
+
 ## Goal
 
 When a customer says "I never cancelled that!", the business can show **who** did **what**, **when**, from **where**, and **what it was before**.

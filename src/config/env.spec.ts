@@ -1,5 +1,7 @@
 import { parseEnv } from './env.js';
 
+const PROD_SECRET = 'x'.repeat(32);
+
 describe('parseEnv', () => {
   it('applies defaults for an empty environment', () => {
     expect(parseEnv({})).toMatchObject({
@@ -83,7 +85,7 @@ describe('parseEnv', () => {
 
   it('defaults DATABASE_URL to the docker Postgres outside production', () => {
     expect(parseEnv({}).DATABASE_URL).toBe(
-      'postgresql://postgres:postgres@localhost:5433/homeease-dev',
+      'postgresql://postgres:postgres@localhost:5433/slotwise-dev',
     );
   });
 
@@ -94,14 +96,42 @@ describe('parseEnv', () => {
     expect(
       parseEnv({
         NODE_ENV: 'production',
-        DATABASE_URL: 'postgresql://app:secret@db.internal:5432/homeease',
+        DATABASE_URL: 'postgresql://app:secret@db.internal:5432/slotwise',
+        JWT_SECRET: PROD_SECRET,
       }).DATABASE_URL,
-    ).toBe('postgresql://app:secret@db.internal:5432/homeease');
+    ).toBe('postgresql://app:secret@db.internal:5432/slotwise');
   });
 
   it('rejects a non-Postgres DATABASE_URL', () => {
     expect(() => parseEnv({ DATABASE_URL: 'mysql://localhost/db' })).toThrow(
       /DATABASE_URL/,
     );
+  });
+
+  it('requires a JWT_SECRET of 32+ bytes in production, defaults it elsewhere', () => {
+    const production = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://app:secret@db.internal:5432/slotwise',
+    };
+    expect(() => parseEnv(production)).toThrow(
+      /Required in production[\s\S]*JWT_SECRET/,
+    );
+    expect(() => parseEnv({ ...production, JWT_SECRET: 'short' })).toThrow(
+      /32 bytes[\s\S]*JWT_SECRET/,
+    );
+    expect(
+      parseEnv({ ...production, JWT_SECRET: PROD_SECRET }).JWT_SECRET,
+    ).toBe(PROD_SECRET);
+    expect(Buffer.byteLength(parseEnv({}).JWT_SECRET)).toBeGreaterThanOrEqual(
+      32,
+    );
+  });
+
+  it('validates token lifetimes and APP_URL', () => {
+    expect(parseEnv({}).ACCESS_TOKEN_TTL).toBe('15m');
+    expect(() => parseEnv({ ACCESS_TOKEN_TTL: '15 minutes' })).toThrow(
+      /ACCESS_TOKEN_TTL/,
+    );
+    expect(() => parseEnv({ APP_URL: 'ftp://x' })).toThrow(/APP_URL/);
   });
 });

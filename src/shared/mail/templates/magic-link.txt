@@ -1,0 +1,6 @@
+Your sign-in link
+
+Sign in{{#if businessName}} to book with {{ businessName }}{{/if}}: {{ actionUrl }}
+
+The link works once and expires in {{ expiresInMinutes }} minutes.
+If you didn't ask for this, you can ignore this email.

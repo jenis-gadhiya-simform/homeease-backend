@@ -18,26 +18,28 @@ type PrismaOptions = Prisma.PrismaClientOptions & {
 };
 
 /**
- * The app's single Prisma client (one connection pool per process).
+ * One pooled Prisma client whose connections run as `role`.
  *
  * Uses the `pg` driver adapter, so queries go through node-postgres: pooled,
  * and traced by NestJS Observe like any other `pg` query.
- * Inject it in repositories only; services and controllers never see Prisma.
  */
-@Injectable()
-export class PrismaService
+abstract class RolePrismaClient
   extends PrismaClient<PrismaOptions>
   implements OnModuleInit, OnModuleDestroy
 {
-  private readonly logger = new Logger(PrismaService.name);
+  protected abstract readonly logger: Logger;
 
-  constructor() {
+  constructor(role: string, poolMax: number) {
     super({
       adapter: new PrismaPg({
         connectionString: env.DATABASE_URL,
-        max: env.DATABASE_POOL_MAX,
+        max: poolMax,
         connectionTimeoutMillis: 5_000,
         idleTimeoutMillis: 30_000,
+        // Every session runs in UTC, so now(), date_trunc() and timestamptz
+        // text never depend on the server's zone; and as `role`, so
+        // row-level security applies to the app (F01).
+        options: `-c TimeZone=UTC -c role=${role}`,
       }),
       log: [{ emit: 'event', level: 'warn' }],
     });
@@ -64,5 +66,34 @@ export class PrismaService
 
   async onModuleDestroy() {
     await this.$disconnect();
+  }
+}
+
+/**
+ * The app's Prisma client, connected as `DATABASE_APP_ROLE` (slotwise_app):
+ * row-level security applies, so tenant tables are only visible through
+ * `TenantPrismaService`. Inject it in repositories only; services and
+ * controllers never see Prisma.
+ */
+@Injectable()
+export class PrismaService extends RolePrismaClient {
+  protected readonly logger = new Logger(PrismaService.name);
+
+  constructor() {
+    super(env.DATABASE_APP_ROLE, env.DATABASE_POOL_MAX);
+  }
+}
+
+/**
+ * Connected as `DATABASE_ADMIN_ROLE` (slotwise_admin, BYPASSRLS): sees every
+ * tenant. Only for platform-admin endpoints and background jobs that work
+ * across tenants; never inject it into tenant-facing code. Small pool.
+ */
+@Injectable()
+export class AdminPrismaService extends RolePrismaClient {
+  protected readonly logger = new Logger(AdminPrismaService.name);
+
+  constructor() {
+    super(env.DATABASE_ADMIN_ROLE, Math.min(env.DATABASE_POOL_MAX, 3));
   }
 }

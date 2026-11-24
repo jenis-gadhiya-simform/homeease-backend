@@ -7,6 +7,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Public } from '@nestjs/authentication';
 import { Mailer } from '@nestjs/mail';
 import {
   ApiAcceptedResponse,
@@ -31,6 +32,7 @@ const previewQuerySchema = z.string().trim().min(1).max(100).default('Ada');
  * send a test email to Mailpit, or preview a template in the browser.
  */
 @ApiTags('Dev: Email')
+@Public()
 @Controller('dev/emails')
 export class DevEmailController {
   constructor(

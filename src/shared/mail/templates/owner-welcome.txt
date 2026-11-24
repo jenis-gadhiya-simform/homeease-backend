@@ -1,0 +1,7 @@
+Welcome to SlotWise, {{ name }}!
+
+{{ businessName }} is set up on SlotWise and you are its Owner. Choose a password to sign in:
+
+{{ actionUrl }}
+
+The link works once and expires in {{ expiresInHours }} hours. If it has expired, ask the SlotWise team for a new one.

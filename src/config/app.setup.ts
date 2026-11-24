@@ -1,6 +1,7 @@
 import { StandardSchemaValidationPipe } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
+import { requestContextMiddleware } from '../shared/context/request-context.middleware.js';
 import { env } from './env.js';
 
 /**
@@ -8,6 +9,10 @@ import { env } from './env.js';
  * the same middleware as production.
  */
 export function configureApp(app: NestExpressApplication): void {
+  // First middleware: request id + RequestContext (AsyncLocalStorage) for the
+  // rest of the request, and X-Request-Id on every response.
+  app.use(requestContextMiddleware);
+
   // Security headers (CSP, HSTS, X-Content-Type-Options, …); also removes X-Powered-By.
   app.use(helmet());
 

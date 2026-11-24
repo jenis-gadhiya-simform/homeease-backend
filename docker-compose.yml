@@ -5,13 +5,13 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: homeease-dev
+      POSTGRES_DB: slotwise-dev
     ports:
       - '5433:5432' # 5433 on the host: avoids clashing with a locally installed Postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d homeease-dev']
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d slotwise-dev']
       interval: 5s
       timeout: 2s
       retries: 10

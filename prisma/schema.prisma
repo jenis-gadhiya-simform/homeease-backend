@@ -18,3 +18,236 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+/// Staff-side lifecycle (F02): created PENDING_SETUP, ACTIVE once a password is set.
+enum UserStatus {
+  PENDING_SETUP
+  ACTIVE
+  DISABLED
+
+  @@map("user_status")
+}
+
+/// Staff-side identity, global (one person can work at two businesses).
+/// The platform admin is the only user the seed creates (F00).
+model User {
+  id              String     @id @default(uuid(7)) @db.Uuid
+  /// Stored lowercased.
+  email           String     @unique
+  /// Null until the user completes account setup.
+  passwordHash    String?    @map("password_hash")
+  name            String
+  /// Only the seed sets this; there is no API to create or promote platform admins.
+  isPlatformAdmin Boolean    @default(false) @map("is_platform_admin")
+  status          UserStatus @default(PENDING_SETUP)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  accountSetupTokens AccountSetupToken[]
+  memberships        Membership[]
+
+  @@map("user")
+}
+
+/// What an AccountSetupToken is for (F02).
+enum AccountTokenPurpose {
+  /// First password of a new staff-side user (created by F01 / F04). 72 h.
+  SETUP
+  /// Forgotten password. 30 min.
+  RESET
+
+  @@map("account_token_purpose")
+}
+
+/// Single-use set-password link for staff-side users. Only the SHA-256 of
+/// the token is stored; the raw token exists only in the email.
+model AccountSetupToken {
+  id        String              @id @default(uuid(7)) @db.Uuid
+  userId    String              @map("user_id") @db.Uuid
+  purpose   AccountTokenPurpose
+  tokenHash String              @unique @map("token_hash")
+  expiresAt DateTime            @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime?           @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("account_setup_token")
+}
+
+/// Customer identity, global across businesses (per-business profile: F08).
+model CustomerAccount {
+  id              String    @id @default(uuid(7)) @db.Uuid
+  /// Stored lowercased.
+  email           String    @unique
+  /// Null = magic-link only.
+  passwordHash    String?   @map("password_hash")
+  emailVerifiedAt DateTime? @map("email_verified_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  magicLinkTokens MagicLinkToken[]
+
+  @@map("customer_account")
+}
+
+/// What a MagicLinkToken is for (F02).
+enum MagicLinkPurpose {
+  /// Passwordless sign-in. 15 min.
+  LOGIN
+  /// Customer forgot their password. 30 min.
+  RESET
+
+  @@map("magic_link_purpose")
+}
+
+/// Single-use emailed link for customers. Only the SHA-256 is stored.
+model MagicLinkToken {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  accountId String           @map("account_id") @db.Uuid
+  purpose   MagicLinkPurpose @default(LOGIN)
+  tokenHash String           @unique @map("token_hash")
+  expiresAt DateTime         @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime?        @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  account CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, purpose])
+  @@map("magic_link_token")
+}
+
+/// Refresh-token families for @nestjs/authentication's TokenService. Ids are
+/// the package's opaque strings (not UUIDs); `userId` is a User or a
+/// CustomerAccount id, so it has no foreign key.
+model RefreshTokenFamily {
+  id        String    @id
+  /// Null only for a family revoked before any of its tokens was saved.
+  userId    String?   @map("user_id")
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tokens RefreshToken[]
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_token_family")
+}
+
+/// One refresh token, stored as its SHA-256 (`id`). Single use.
+model RefreshToken {
+  id        String    @id
+  familyId  String    @map("family_id")
+  userId    String    @map("user_id")
+  claims    Json?
+  createdAt DateTime  @map("created_at") @db.Timestamptz(3)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+
+  family RefreshTokenFamily @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  @@index([familyId])
+  @@map("refresh_token")
+}
+
+// ---------------------------------------------------------------------------
+// F01 Tenancy. Every business-owned table has `tenant_id` (FK to tenant),
+// composite indexes start with it, and PostgreSQL row-level security limits
+// the app role to the tenant in `app.tenant_id` (see the migration and
+// src/shared/database/tenant-prisma.service.ts).
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@map("tenant_status")
+}
+
+/// A business. The root of tenancy: it has no tenant_id and no RLS; its
+/// fields are the public profile.
+model Tenant {
+  id        String       @id @default(uuid(7)) @db.Uuid
+  /// Public booking URL: /b/glow-salon. Lowercase, ^[a-z0-9-]{3,40}$.
+  slug      String       @unique
+  name      String
+  /// E.164, +91…
+  phone     String?
+  city      String?
+  address   String?
+  status    TenantStatus @default(ACTIVE)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships Membership[]
+
+  @@map("tenant")
+}
+
+/// Role inside one business (F03 / F04).
+enum MemberRole {
+  OWNER
+  MANAGER
+  RECEPTIONIST
+  STAFF
+
+  @@map("member_role")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  REMOVED
+
+  @@map("membership_status")
+}
+
+/// A staff-side user's role in one business. RLS: visible in its tenant, and
+/// to its own user (so a user can list their businesses before choosing one).
+/// One ACTIVE OWNER per tenant (partial unique index in the migration).
+model Membership {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  tenantId  String           @map("tenant_id") @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  role      MemberRole
+  status    MembershipStatus @default(ACTIVE)
+  createdBy String?          @map("created_by") @db.Uuid
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("membership")
+}
+
+/// Who did what, when (F09). Written in the same transaction as the change.
+/// The app role may only INSERT and SELECT (append-only).
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  /// Null = platform-level event.
+  tenantId   String?  @map("tenant_id") @db.Uuid
+  /// USER | CUSTOMER | SYSTEM | PLATFORM_ADMIN | WEBHOOK
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id") @db.Uuid
+  actorRole  String?  @map("actor_role")
+  /// tenant.created, membership.created, …
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id") @db.Uuid
+  before     Json?
+  after      Json?
+  reason     String?
+  requestId  String?  @map("request_id")
+  ip         String?  @db.Inet
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([tenantId, entityType, entityId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("audit_log")
+}

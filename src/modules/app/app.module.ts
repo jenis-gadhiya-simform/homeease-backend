@@ -1,15 +1,20 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { ObserveModule } from '../../config/observe.js';
+import { ApiExceptionFilter } from '../../shared/errors/api-exception.filter.js';
 import { DatabaseModule } from '../../shared/database/database.module.js';
 import { SharedMailModule } from '../../shared/mail/mail.module.js';
 import { SharedQueueModule } from '../../shared/queue/queue.module.js';
 import { SharedRedisModule } from '../../shared/redis/redis.module.js';
+import { AuditModule } from '../audit/audit.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 import { EmailModule } from '../email/email.module.js';
 import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
 import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
+import { TenancyModule } from '../tenancy/tenancy.module.js';
 import { env, isProduction } from '../../config/env.js';
 
 @Module({
@@ -30,10 +35,18 @@ import { env, isProduction } from '../../config/env.js';
     SharedQueueModule,
     SharedMailModule,
     HealthModule,
+    // Before RateLimitModule: authentication runs first, then the throttler.
+    AuthModule,
     RateLimitModule,
     EmailModule,
+    AuditModule,
+    TenancyModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Every error response is { error: { code, message, requestId } }.
+    { provide: APP_FILTER, useClass: ApiExceptionFilter },
+  ],
 })
 export class AppModule {}

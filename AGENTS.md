@@ -51,17 +51,25 @@ src/
 ├── main.ts       # bootstrap only
 ├── config/       # app-wide setup: env.ts (validated env), app.setup.ts (helmet, validation pipe), observe.ts, swagger.ts
 ├── generated/    # Prisma client (npm run db:generate) — generated, gitignored, never edit
-├── shared/       # third-party integrations as shared (usually @Global) modules
-│   ├── database/ # DatabaseModule: PrismaService (pg adapter), DatabaseHealthIndicator, prisma-errors
+├── shared/       # third-party integrations as shared (usually @Global) modules, plus app-wide building blocks
+│   ├── context/  # RequestContext (AsyncLocalStorage: requestId, actor, ip) + the middleware that opens it
+│   ├── database/ # DatabaseModule: PrismaService (role slotwise_app, RLS), AdminPrismaService (BYPASSRLS), TenantPrismaService, health, prisma-errors
+│   ├── errors/   # DomainError + ErrorCode, ApiExceptionFilter (the error envelope)
 │   ├── mail/     # SharedMailModule: @nestjs/mail transport, from, templates/ (layout + one file per mail)
+│   ├── money/    # integer paise, formatInr()
 │   ├── queue/    # SharedQueueModule: BullMQ connection + default job options
-│   └── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
+│   ├── redis/    # SharedRedisModule: one Redis client + RedisHealthIndicator
+│   ├── security/ # passwordSchema (F02 password policy), generateOneTimeToken()
+│   └── time/     # UTC parsing/validation, rangesOverlap(), DISPLAY_TIMEZONE + formatForEmail()
 └── modules/      # app modules, one folder each
     ├── app/      # root AppModule + sample AppController/AppService
+    ├── audit/    # AuditModule (global): AuditService.record(tx, …), same transaction as the change
+    ├── auth/     # AuthModule (F02): global bearer guard, staff/customer sign-in, account setup, magic link, reset, /me
     ├── email/    # EmailModule: mail classes, EmailService.enqueue(), "emails" queue processor, dev routes
     ├── health/   # GET /health (liveness), GET /ready (readiness) via @nestjs/terminus
     ├── logger/   # LoggingModule (nestjs-pino)
     ├── rate-limit/ # global ThrottlerGuard, counts stored in Redis
+    ├── tenancy/  # TenancyModule (F01): admin onboarding, /tenants/current, /public/:slug, TenantGuard
     └── <feature>/
 ```
 
@@ -74,9 +82,32 @@ src/
 - Configuration: read `env` (or `isProduction`) from `src/config/env.ts`, never `process.env`. A new variable goes into `envSchema` (with a default or `.optional()`), `.env.example`, and the Configuration table in `docs/architecture.md`. Invalid values stop the app at startup with a list of every problem.
 - **Database (PostgreSQL + Prisma 7):** schema in `prisma/schema.prisma`, migrations in `prisma/migrations/` (committed). After a schema change run `npm run db:migrate -- --name <change>`; never edit an applied migration. Models are PascalCase singular mapped to snake_case tables/columns (`@@map`/`@map`), ids are `@default(uuid(7)) @db.Uuid`, timestamps `@db.Timestamptz(3)`.
 - **Feature layering:** controller (HTTP only) → service (rules, throws Nest HTTP exceptions) → repository (the only class that uses `PrismaService`). Repositories `select` the fields the API returns and never return whole Prisma rows; their methods take an optional `tx: Prisma.TransactionClient` so services can compose them in `prisma.$transaction(async (tx) => …)`. Map Prisma errors with `isPrismaError(error, PrismaErrorCode.UniqueViolation)` (→ 409) rather than check-then-insert.
+- **Errors:** every error response is `{ "error": { "code", "message", "requestId" } }` (`ApiExceptionFilter`, global). For an expected business error throw `new DomainError(HttpStatus.CONFLICT, ErrorCode.SlotTaken, '…')` and add new codes to `ErrorCode` (never rename one). Plain Nest exceptions still work and get a code from their status. Unmapped `P2002` → 409, `P2025` → 404, `23P01` → 409; use `isExclusionViolation()` / `isSerializationFailure()` from `prisma-errors.ts` to map them to domain codes yourself.
+- **Authentication (F02):** every route needs a bearer token (global guard from `@nestjs/authentication`); open a route with `@Public()`, restrict by identity with `@StaffOnly()` / `@CustomerOnly()`, read the user with `@CurrentUser()` (a `Principal`: `kind: 'staff' | 'customer'`). Never put roles in tokens. Staff users never self-register: a flow that creates one inserts the `User` as `PENDING_SETUP` and calls `AccountSetupService.createSetupLink(userId, tx)` in its transaction, then emails the URL after commit. Emailed tokens store only their SHA-256 and answer `410 LINK_EXPIRED` when dead. E2E tests override `PasswordHasher` with `new PasswordHasher({ logN: 10 })` (use `test/support/auth-app.ts`).
+- **Tenancy (F01):** every business-owned table has `tenant_id` (FK to `tenant`), indexes start with it, and its migration enables RLS with the `tenant_isolation` policy (`tenant_id = app_current_tenant_id()`). The app connects as `slotwise_app`, so tenant rows are only visible inside `TenantPrismaService.run(tenantId, tx => …)` / `runInCurrent()`. Tenant repository methods take `tenantId` as their first argument and filter by it (review checklist); a foreign id is a 404. Staff tenant routes use `@TenantScoped(...roles)` (`TenantGuard`: `X-Tenant-Id`, suspended → 403). `AdminPrismaService` (BYPASSRLS) is only for `/admin/*` and cross-tenant jobs. E2E cleanup goes through `resetDatabase(admin)`.
+- **Audit:** record changes with `AuditService.record(tx, { tenantId, action, entityType, entityId, before, after })` inside the same transaction; only changed fields, never secrets.
+- **Request context:** read `RequestContext.requestId()` / `RequestContext.actor()` anywhere in a request (no request-scoped providers). The auth guard calls `RequestContext.setActor()`; workers open one with `RequestContext.run()`.
+- **Time and money:** instants are UTC everywhere (API strings end in `Z`: validate with `utcInstantSchema`); `DISPLAY_TIMEZONE` / `formatForEmail()` only for emails, reports and job schedules. Money is integer paise (`paiseSchema`), currency INR implied, `formatInr()` only for server-rendered text. No timezone or currency in env, DB columns or the API.
+- **Seed:** `npm run db:seed` creates exactly one user, the platform admin, from `PLATFORM_ADMIN_*` env. Never add tenants, staff, services or test data to it; e2e tests build their own data and perf datasets live in `scripts/`.
 - BullMQ job ids must not contain `:` (use `welcome-${id}`).
-- Local dependencies run with `docker compose up -d`: PostgreSQL on **port 5433** (database `homeease-dev`), Redis, and Mailpit (every email the app sends shows up at http://localhost:8025).
-- E2E tests (`npm run test:e2e`) never touch dev data: they use Postgres database `homeease-test` (created and migrated automatically) and Redis logical database 1. Both are emptied after every run, pass or fail (`test/setup/*.global-setup.ts`). Tests should still clean up what they create between tests (e.g. `deleteMany()` in `beforeEach`).
+- Local dependencies run with `docker compose up -d`: PostgreSQL on **port 5433** (database `slotwise-dev`), Redis, and Mailpit (every email the app sends shows up at http://localhost:8025).
+- CI (`.github/workflows/ci.yml`) runs format check, lint, typecheck, unit tests, `migrate deploy` + a drift check, the seed, e2e and the build. Run the same locally with `/check` before pushing.
+- E2E tests (`npm run test:e2e`) never touch dev data: they use Postgres database `slotwise-test` (created and migrated automatically) and Redis logical database 1. Both are emptied after every run, pass or fail (`test/setup/*.global-setup.ts`). Tests should still clean up what they create between tests (e.g. `deleteMany()` in `beforeEach`). E2E files run one at a time (`fileParallelism: false`) because they share the database.
 - New modules are imported into `src/modules/app/app.module.ts`. The Nest CLI can't find that root module by itself, so generate with `--skip-import` and register the module by hand.
+
+## Finishing a feature
+
+Feature specs live in `docs/features/Fxx-*.md`. When a feature (or a new version of it) is done:
+
+1. Under the spec's header line, add `**Status:** ✅ Completed — **vN** (YYYY-MM-DD)`, linking to the summary. Partial work is `🚧 In progress`. Bump the version (v1 → v2 …) for each later round of changes to the same feature, and keep earlier summaries.
+2. Append an `## Implementation summary (vN)` section to the end of the spec with:
+   - **What was built:** a table of every item in the spec's "To add" / scope, with ✅ / ⏭️ deferred / ❌, where it lives (files) and short notes.
+   - **Decisions that differ from the spec**, and why.
+   - **New scripts, env vars and dependencies.**
+   - **Tests** added and the final pass counts.
+   - **Acceptance criteria**, each with ✅ / ⏳ and how it was verified (or what blocks it).
+   - **Follow-ups for later features.**
+3. Update the Status column for the feature in `docs/README.md`.
+4. Keep `docs/architecture.md` and this file in sync with anything new (folders, conventions, env vars, commands).
 
 See `docs/architecture.md`.

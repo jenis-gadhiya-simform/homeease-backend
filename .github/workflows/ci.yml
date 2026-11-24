@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: slotwise-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d slotwise-ci"
+          --health-interval 5s --health-timeout 2s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 2s --health-retries 5
+
+    env:
+      NODE_ENV: test
+      # Migration check database; e2e tests create and use slotwise-test.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slotwise-ci
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slotwise-test
+      REDIS_URL: redis://localhost:6379
+      TEST_REDIS_URL: redis://localhost:6379/1
+      # No SMTP server in CI: emails are logged instead of sent.
+      MAIL_TRANSPORT: log
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Migrations apply on an empty database
+        run: npm run db:migrate:deploy
+
+      - name: Schema matches migrations (no missing migration)
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Seed creates the platform admin
+        env:
+          PLATFORM_ADMIN_EMAIL: admin@slotwise.ci
+          PLATFORM_ADMIN_PASSWORD: ci-only-admin-password
+        run: |
+          npm run db:seed
+          npm run db:seed
+          count=$(psql "$DATABASE_URL" -tAc 'SELECT count(*) FROM "user"')
+          test "$count" = "1" || { echo "expected exactly 1 user, found $count"; exit 1; }
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Build
+        run: npm run build

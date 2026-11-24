@@ -1,6 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
-import { Mailer, MailError } from '@nestjs/mail';
+import { Logger, type Type } from '@nestjs/common';
+import { type Mailable, Mailer, MailError } from '@nestjs/mail';
 import { type Job, UnrecoverableError } from 'bullmq';
 import {
   EMAIL_QUEUE,
@@ -23,7 +23,9 @@ export class EmailProcessor extends WorkerHost {
   }
 
   async process(job: Job<EmailJobData>) {
-    const mail = MAILS[job.name as MailName];
+    // Job data is plain JSON checked against the mail's type at enqueue time.
+    const mail = MAILS[job.name as MailName] as
+      Type<Mailable<unknown>> | undefined;
     if (!mail) {
       throw new UnrecoverableError(`Unknown mail "${job.name}"`);
     }

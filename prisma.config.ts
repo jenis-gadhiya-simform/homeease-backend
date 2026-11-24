@@ -11,6 +11,8 @@ export default defineConfig({
   schema: 'prisma/schema.prisma',
   migrations: {
     path: 'prisma/migrations',
+    // Run by `prisma migrate reset` (npm run db:migrate:reset) and `prisma db seed`.
+    seed: 'tsx prisma/seed.ts',
   },
   datasource: {
     // Only migrate/studio/db commands need it; `prisma generate` doesn't.

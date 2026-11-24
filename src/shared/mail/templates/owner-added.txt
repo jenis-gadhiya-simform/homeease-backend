@@ -1,0 +1,5 @@
+You're now an Owner
+
+Hi {{ name }}, you've been made the Owner of {{ businessName }} on SlotWise. Sign in with your existing password and pick it from your businesses:
+
+{{ actionUrl }}

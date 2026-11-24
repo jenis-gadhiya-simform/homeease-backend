@@ -30,11 +30,22 @@ backend/
 │   │   └── swagger.spec.ts
 │   ├── generated/prisma/        # Prisma client, generated (gitignored)
 │   ├── shared/                  # Third-party integrations, shared across modules
+│   │   ├── context/
+│   │   │   ├── request-context.ts            # RequestContext (AsyncLocalStorage): requestId, actor, ip
+│   │   │   └── request-context.middleware.ts # opens it per request, sets X-Request-Id
 │   │   ├── database/
 │   │   │   ├── database.module.ts  # DatabaseModule (@Global)
-│   │   │   ├── prisma.service.ts   # PrismaService: one pg pool, fail-fast connect, disconnect on shutdown
+│   │   │   ├── prisma.service.ts   # PrismaService (role slotwise_app) + AdminPrismaService (slotwise_admin, BYPASSRLS): pg pools, TimeZone=UTC
+│   │   │   ├── tenant-prisma.service.ts # TenantPrismaService: transactions with app.tenant_id / app.user_id set (RLS)
 │   │   │   ├── database.health.ts  # SELECT 1 check for /ready
-│   │   │   └── prisma-errors.ts    # isPrismaError(e, PrismaErrorCode.UniqueViolation)
+│   │   │   └── prisma-errors.ts    # isPrismaError(), isExclusionViolation(), isSerializationFailure()
+│   │   ├── errors/
+│   │   │   ├── domain-error.ts         # DomainError(status, code, message) + ErrorCode
+│   │   │   └── api-exception.filter.ts # global filter: the error envelope
+│   │   ├── money/money.ts       # Paise, paiseSchema, formatInr()
+│   │   ├── security/password-policy.ts # passwordSchema (F02 policy)
+│   │   ├── security/one-time-token.ts  # generateOneTimeToken(): 32 random bytes + the SHA-256 stored in its place
+│   │   ├── time/time.ts         # utcInstantSchema, parseUtc(), rangesOverlap(), DISPLAY_TIMEZONE, formatForEmail()
 │   │   ├── mail/
 │   │   │   ├── mail.module.ts   # SharedMailModule: @nestjs/mail transport, templates, default from
 │   │   │   ├── mail-transport.ts # MAIL_TRANSPORT: smtp (default) | log | file
@@ -50,23 +61,31 @@ backend/
 │       │   ├── app.controller.ts      # Sample controller (GET /)
 │       │   ├── app.service.ts         # Sample service
 │       │   └── app.controller.spec.ts
+│       ├── auth/                # AuthModule (F02): global JWT guard, sign-in, account setup, magic link, reset, /me
+│       │   └── repositories/    # users, customer accounts, setup/magic-link tokens, PrismaRefreshTokenStore
+│       ├── audit/               # AuditModule (global): AuditService.record(tx, …) — F09 table only
 │       ├── email/               # EmailModule: mails/, EmailService, EmailProcessor, dev routes
 │       ├── health/              # GET /health, GET /ready (@nestjs/terminus)
 │       ├── logger/
 │       │   └── logger.module.ts # LoggingModule (nestjs-pino)
 │       ├── rate-limit/          # RateLimitModule: global ThrottlerGuard, Redis storage
+│       ├── tenancy/             # TenancyModule (F01): /admin/tenants, /tenants/current, /public/:slug, TenantGuard
 │       └── <feature>/
 │           ├── <feature>.module.ts
 │           ├── <feature>.controller.ts
 │           ├── <feature>.service.ts
 │           └── <feature>.*.spec.ts
 ├── test/
-│   └── app.e2e-spec.ts          # End-to-end test against the full AppModule
+│   ├── setup/                   # e2e global setup: test database + Redis db 1
+│   └── *.e2e-spec.ts            # End-to-end tests against the full AppModule
+├── .github/workflows/ci.yml     # CI: format, lint, typecheck, unit, migrations, seed, e2e, build
 ├── docs/                        # Project documentation (this file)
 ├── prisma/
 │   ├── schema.prisma            # Data model
-│   └── migrations/              # SQL migrations (committed)
-├── prisma.config.ts             # Prisma CLI config (schema, migrations, DATABASE_URL)
+│   ├── migrations/              # SQL migrations (committed)
+│   ├── seed.ts                  # npm run db:seed: the platform admin, nothing else
+│   └── seed/platform-admin.ts   # seed logic (tested in test/seed.e2e-spec.ts)
+├── prisma.config.ts             # Prisma CLI config (schema, migrations, seed, DATABASE_URL)
 ├── docker-compose.yml           # Local PostgreSQL (5433) + Redis + Mailpit: docker compose up -d
 ├── .claude/                     # Claude Code commands, hooks and skills
 ├── dist/                        # Build output (nest build) — not committed
@@ -143,25 +162,70 @@ sequenceDiagram
     E-->>C: 200 OK, "Hello World!"
 ```
 
-| #   | Stage                  | Purpose                                                           | In this project today                                |
-| --- | ---------------------- | ----------------------------------------------------------------- | ---------------------------------------------------- |
-| 1   | HTTP adapter (Express) | Parses the raw request                                            | Default Express adapter                              |
-| 2   | Middleware             | Cross-cutting request work (CORS, request IDs, logging)           | `helmet` security headers; pino-http request logging |
-| 3   | Guards                 | Authentication / authorization / rate limiting                    | `ThrottlerGuard` (global): 429 over the limit        |
-| 4   | Interceptors (before)  | Wrap the handler: timing, caching, transforming                   | Observe instrumentation traces the request           |
-| 5   | Pipes                  | Validate and transform `@Body`, `@Param`, `@Query`                | None registered                                      |
-| 6   | Route handler          | Controller method selected by `@Controller` + `@Get`/`@Post` path | `AppController.getHello()` on `GET /`                |
-| 7   | Service / providers    | Business logic, injected via DI                                   | `AppService.getHello()`                              |
-| 8   | Interceptors (after)   | Map or wrap the handler's result                                  | None registered                                      |
-| 9   | Exception filters      | Turn thrown errors into HTTP responses                            | Nest's built-in global filter                        |
+| #   | Stage                  | Purpose                                                           | In this project today                                                                                                                                                                     |
+| --- | ---------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | HTTP adapter (Express) | Parses the raw request                                            | Default Express adapter                                                                                                                                                                   |
+| 2   | Middleware             | Cross-cutting request work (CORS, request IDs, logging)           | `requestContextMiddleware` (request id + `RequestContext`, first); `helmet`; pino-http request logging                                                                                    |
+| 3   | Guards                 | Authentication / authorization / rate limiting                    | `AuthenticationGuard` (global, 401 without a valid bearer token unless `@Public()`), then `ThrottlerGuard` (global, 429); `AccountKindGuard` on `@StaffOnly()` / `@CustomerOnly()` routes |
+| 4   | Interceptors (before)  | Wrap the handler: timing, caching, transforming                   | Observe instrumentation traces the request                                                                                                                                                |
+| 5   | Pipes                  | Validate and transform `@Body`, `@Param`, `@Query`                | `StandardSchemaValidationPipe` (global, Zod)                                                                                                                                              |
+| 6   | Route handler          | Controller method selected by `@Controller` + `@Get`/`@Post` path | `AppController.getHello()` on `GET /`                                                                                                                                                     |
+| 7   | Service / providers    | Business logic, injected via DI                                   | `AppService.getHello()`                                                                                                                                                                   |
+| 8   | Interceptors (after)   | Map or wrap the handler's result                                  | None registered                                                                                                                                                                           |
+| 9   | Exception filters      | Turn thrown errors into HTTP responses                            | `ApiExceptionFilter` (global, `APP_FILTER`); `HealthCheckFilter` on the probes                                                                                                            |
 
 ### Error handling
 
-If anything in steps 2–8 throws:
+Every error response has one shape, written by `ApiExceptionFilter` (`src/shared/errors/`, registered as `APP_FILTER` in `AppModule`):
 
-- An `HttpException` (e.g. `NotFoundException`, `BadRequestException`) becomes a JSON response with that status code: `{ "statusCode": 404, "message": "...", "error": "Not Found" }`.
-- Any other error becomes `500 Internal Server Error`, and the real error is logged rather than returned to the client.
+```json
+{
+  "error": {
+    "code": "SLOT_TAKEN",
+    "message": "That slot was just booked",
+    "requestId": "0193…"
+  }
+}
+```
+
+| Thrown                                                     | Status | `code`                                                                          |
+| ---------------------------------------------------------- | ------ | ------------------------------------------------------------------------------- |
+| `new DomainError(status, ErrorCode.X, message)`            | given  | `ErrorCode.X` (stable, part of the API contract)                                |
+| Validation pipe (`@Body({ schema })`)                      | 400    | `VALIDATION_FAILED`, plus `details: ["to: Invalid email address"]`              |
+| Any other `HttpException` (guards, throttler, `NotFound…`) | its    | from the status: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED`, … |
+| Prisma `P2002` (unique) not handled by the service         | 409    | `ALREADY_EXISTS`                                                                |
+| Prisma `P2025` (record not found)                          | 404    | `NOT_FOUND`                                                                     |
+| Postgres `23P01` (exclusion constraint)                    | 409    | `CONFLICT`                                                                      |
+| Anything else                                              | 500    | `INTERNAL_ERROR`, message `Internal server error`; logged with the request id   |
+
+- Services should map constraint errors to a domain code themselves (`isExclusionViolation(error)` → `SLOT_TAKEN`); the filter's mapping is the fallback.
+- A 5xx never returns the thrown message. Headers set by the thrower (`Retry-After`, `WWW-Authenticate`) are kept.
+- `/ready` keeps Terminus' own 503 body (which dependency is down) through the controller-scoped `HealthCheckFilter`.
 - In production, Observe records the error with its trace and logs so it can be investigated in the Observe dashboard.
+
+### Request context
+
+`requestContextMiddleware` (`src/shared/context/`, first middleware in `configureApp()`) gives each request an id (a well-formed incoming `X-Request-Id`, otherwise a UUID), returns it in `X-Request-Id`, and opens a `RequestContext` (`AsyncLocalStorage`) for the rest of the request:
+
+| Value       | Set by                                            | Read by                           |
+| ----------- | ------------------------------------------------- | --------------------------------- |
+| `requestId` | the middleware (same id as pino's `req.id`)       | error envelope, logs, audit (F09) |
+| `ip`        | the middleware (`req.ip`, honours `TRUST_PROXY`)  | audit (F09)                       |
+| `actor`     | the auth guard, `RequestContext.setActor()` (F02) | audit, RLS `tenant_id` (F01)      |
+
+Read it anywhere with `RequestContext.requestId()` / `RequestContext.actor()`: no request-scoped providers. Queue processors and scripts open their own with `RequestContext.run({ requestId, ip, actor }, fn)`.
+
+### Time and money
+
+| Rule                                                                                                         | Helper (`src/shared/`)                                                    |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Instants are UTC in the API, code and database. API strings are ISO 8601 ending in `Z`; offsets are rejected | `utcInstantSchema` (Zod → `Date`), `parseUtc()`, `toUtcIso()`             |
+| Ranges are half-open `[start, end)` (touching ranges don't overlap), like `tstzrange '[)'`                   | `rangesOverlap()`                                                         |
+| Postgres sessions run with `TimeZone=UTC`                                                                    | `PrismaService` pool option                                               |
+| `Asia/Kolkata` is used **only** for emails, reports and job schedules                                        | `DISPLAY_TIMEZONE`, `formatForEmail()` → `Tue, 24 Nov 2026, 3:30 pm IST`  |
+| Money is integer paise (`49900` = ₹499.00), currency INR implied                                             | `paiseSchema`, `formatInr()` → `₹1,00,000.00` (server-rendered text only) |
+
+No timezone or currency appears in env, database columns or the API.
 
 ### Logging
 
@@ -192,6 +256,17 @@ It is served everywhere except production. Set `SWAGGER_ENABLED=true` or `false`
 
 Both are excluded from rate limiting, request logs and Observe traces. On `SIGTERM`, `/ready` answers `503 {"status":"shutting_down"}` for `SHUTDOWN_GRACE_MS` so the load balancer stops sending traffic, then Nest closes Redis and exits. Add a check for each new hard dependency (e.g. the database) to `HealthController.ready()`, with its indicator in that dependency's shared module.
 
+### Authentication (F02)
+
+`AuthModule` configures `@nestjs/authentication` with HS256 access tokens (`JWT_SECRET`, `ACCESS_TOKEN_TTL`, issuer `slotwise`, audience `slotwise-api`) and rotating refresh tokens stored in PostgreSQL (`PrismaRefreshTokenStore`, checked by the package's own store contract suite).
+
+- **Every route requires a bearer token** (global guard). `@Public()` opens a route or controller; health, the sample route, dev email routes and `/auth/*` are public.
+- **Two identities:** staff-side `User` (platform admin, Owner, Manager, Receptionist, Staff; never self-registers) and `CustomerAccount`. The token's `kind` claim says which table `sub` is in; `JwtAuth.validate()` loads the row **on every request** (a disabled user is locked out at once) and sets `RequestContext.actor`. Roles are never in the token.
+- **Tokens:** sign-in answers `{ accessToken, tokenType, expiresIn }`; the refresh token travels only in the `sw_refresh` cookie (httpOnly, `SameSite=Strict`, path `/auth`, `Secure` in production). `POST /auth/refresh` rotates it; a reused one revokes its whole family (401).
+- **Emailed links** (account setup 72 h, staff reset 30 min, magic link 15 min, customer reset 30 min) are 32 random bytes; only the SHA-256 is stored, spending one is a single conditional `UPDATE … WHERE used_at IS NULL`, and a dead link is `410 LINK_EXPIRED`. Links point at `APP_URL`.
+- **No enumeration:** wrong email, wrong password, pending and disabled users get the same `401 INVALID_CREDENTIALS` after the same hash work (`PasswordHasher.verify()` against a dummy hash); magic-link and forgot-password always answer `202`.
+- Read the user with `@CurrentUser()` in controllers, or `RequestContext.actor()` anywhere. Tests: override `PasswordHasher` with `new PasswordHasher({ logN: 10 })` (see `test/support/auth-app.ts`).
+
 ### Rate limiting
 
 `RateLimitModule` registers `ThrottlerGuard` globally: by default **100 requests per minute per client IP, per route**. Counts are stored in Redis through `@nestjs-redis/throttler-storage`, so every instance shares one budget. Over the limit, the response is `429` with `Retry-After` (seconds).
@@ -199,7 +274,7 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 - `@SkipThrottle()` opts a controller or route out. `@Throttle({ default: { limit: 5, ttl: 60_000 } })` tightens one route.
 - **Fails open:** if Redis errors, the request is allowed and the error logged (`FailOpenThrottlerStorage`), so a Redis outage doesn't take the API down. `/ready` reports Redis down at the same time.
 - Behind a load balancer, set `TRUST_PROXY` (hop count) or every client shares the proxy's IP.
-- When authentication is added, import `RateLimitModule` **after** it and track by user (see the comment in `rate-limit.module.ts`).
+- `AuthModule` is imported **before** `RateLimitModule`, so authentication runs first. Sign-in, magic-link and password-reset routes are also limited to `AUTH_THROTTLE_LIMIT` (5) per minute per IP (`@Throttle`) **and** per email (`AuthRateLimiter`, Redis, fails open).
 
 ### Security headers
 
@@ -284,7 +359,7 @@ sequenceDiagram
 
 Prisma 7 with the `pg` driver adapter: queries run through node-postgres (one pool per process, size `DATABASE_POOL_MAX`), so NestJS Observe traces them like any `pg` query. The client is generated into `src/generated/prisma` (`npm run db:generate`, also run on `npm install` and before `npm run build`).
 
-- **`DatabaseModule`** (`src/shared/database/`, global) provides `PrismaService`. Startup fails fast with `Database unreachable at host/db: ECONNREFUSED` if Postgres is down. The pool closes on shutdown. `/ready` checks `SELECT 1`.
+- **`DatabaseModule`** (`src/shared/database/`, global) provides `PrismaService` (app role, RLS applies), `TenantPrismaService` (tenant-scoped transactions) and `AdminPrismaService` (BYPASSRLS, admin/job code only); see Multi-tenancy below. Startup fails fast with `Database unreachable at host/db: ECONNREFUSED` if Postgres is down. The pool closes on shutdown. `/ready` checks `SELECT 1`.
 - **Schema conventions** (`prisma/schema.prisma`): PascalCase singular models mapped to snake_case tables/columns, UUIDv7 primary keys (time-ordered: good index locality and keyset pagination), `timestamptz(3)` timestamps.
 - **Layering** for a feature module that uses the database (`src/modules/<feature>/`):
 
@@ -300,6 +375,30 @@ Prisma 7 with the `pg` driver adapter: queries run through node-postgres (one po
 - **Pagination:** keyset (cursor) on the UUIDv7 id: `?limit=20&cursor=<nextCursor>`. Stable and fast at any depth, unlike `OFFSET`.
 - **Side effects after a write** (e.g. queuing an email) run after the insert commits and never fail the request. For a guarantee that they happen exactly when the row commits, use a transactional outbox.
 
+### Multi-tenancy and row-level security (F01)
+
+Many businesses share one database. Every business-owned table has `tenant_id uuid not null` (FK to `tenant`), composite indexes start with `tenant_id`, and isolation has two layers:
+
+1. **Application:** tenant repositories take `tenantId` first and always filter by it; lookups by id are `where: { id, tenantId }`, so a foreign id is a 404, never a 403.
+2. **Database:** PostgreSQL row-level security. Policies compare `tenant_id` with `app_current_tenant_id()` (= `app.tenant_id`, unset → matches nothing).
+
+| Database role    | Used by                                                      | RLS                    | How                                                              |
+| ---------------- | ------------------------------------------------------------ | ---------------------- | ---------------------------------------------------------------- |
+| login user       | Prisma CLI: migrations, Studio                               | owner                  | `DATABASE_URL` as is                                             |
+| `slotwise_app`   | the app (`PrismaService`)                                    | applies                | `-c role=slotwise_app` on every connection (`DATABASE_APP_ROLE`) |
+| `slotwise_admin` | `/admin/*` and cross-tenant jobs only (`AdminPrismaService`) | bypassed (`BYPASSRLS`) | `-c role=slotwise_admin` (`DATABASE_ADMIN_ROLE`), pool of 3      |
+
+- `TenantPrismaService.run(tenantId, (tx) => …)` opens a transaction and runs `set_config('app.tenant_id', tenantId, true)` (transaction-local, so pooled connections never leak a tenant). `runInCurrent()` takes the tenant from `RequestContext`; `runAsUser(userId)` sets `app.user_id` to list a user's own memberships (policy `own_memberships`). Outside these, the app role sees **zero** tenant rows.
+- **`TenantGuard`** (`@TenantScoped(...roles)`) resolves the business for staff requests: `X-Tenant-Id` picks one of the user's active memberships (or the only one), suspended → 403 `TENANT_SUSPENDED`, not a member → 403 `NOT_A_MEMBER`, several and no header → 400 `TENANT_REQUIRED`; then `RequestContext.setActor({ tenantId, role })`.
+- Public pages take the business from the path (`/public/:slug`); a suspended business is a 404 there.
+- The `tenant` table itself has no `tenant_id` and no RLS (it is the public profile); `audit_log` is RLS'd and append-only for the app role (`INSERT`, `SELECT`).
+- **A new tenant table** needs, in its migration: `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and `CREATE POLICY tenant_isolation ON … USING (tenant_id = app_current_tenant_id()) WITH CHECK (tenant_id = app_current_tenant_id())`. Grants come from default privileges.
+- In production the login user in `DATABASE_URL` must be a member of both roles (the migration grants them to the migrating user); creating `slotwise_admin` with `BYPASSRLS` needs a superuser once.
+
+**Audit log (F09 table).** `AuditService.record(tx, { tenantId, action, entityType, entityId, before, after })` inserts in the caller's transaction; actor, role, request id and IP come from `RequestContext`.
+
+**Seed: one platform admin.** `npm run db:seed` (`prisma/seed.ts`, also run by `npm run db:migrate:reset`) upserts exactly one `User`, the platform admin, from `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` / `PLATFORM_ADMIN_NAME`: lowercased email, `isPlatformAdmin = true`, `ACTIVE`, password hashed with `@nestjs/authentication`'s `PasswordHasher` (the one F02's login verifies with). Re-running never duplicates it and keeps the password; `npm run db:seed -- --reset-password` re-hashes it from env. The password must pass the F02 policy and is never logged. In production the same command runs once as a deploy step with credentials from the secret manager (so `tsx` is a runtime dependency). There is no API to create or promote platform admins. Tenants, staff, services, customers and test/perf data are **never** seeded.
+
 **Migrations workflow**
 
 | Step                                                                                 | Command                                   |
@@ -314,19 +413,22 @@ Migrations are committed and never edited once applied anywhere. For zero-downti
 
 ### Where to add things
 
-| Need                           | Put it in                                                                                             |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| New endpoints                  | A feature module in `src/modules/<feature>/`, imported into `AppModule`                               |
-| Request validation             | A Standard Schema (e.g. Zod) with `@Body({ schema })` / `@Param('id', { schema })`                    |
-| Authentication                 | A global guard via `@nestjs/authentication` (`@Public()` to opt routes out)                           |
-| Configuration / env validation | `@nestjs/config`                                                                                      |
-| Database                       | `@nestjs/typeorm` or `@nestjs/drizzle` in its own module                                              |
-| Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                    |
-| Send an email                  | `EmailService.enqueue()`; new emails: template + `Mailable` + `MAILS` entry (see Email)               |
-| Background job                 | `BullModule.registerQueue()` + a `@Processor` in the feature module (see Background jobs)             |
-| Database table                 | Model in `prisma/schema.prisma` → `npm run db:migrate -- --name …` → repository in the feature module |
-| Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator  |
-| API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller |
+| Need                           | Put it in                                                                                                                                                |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New endpoints                  | A feature module in `src/modules/<feature>/`, imported into `AppModule`                                                                                  |
+| Request validation             | A Standard Schema (e.g. Zod) with `@Body({ schema })` / `@Param('id', { schema })`                                                                       |
+| Authentication                 | Already global (`AuthModule`): every route needs a bearer token; `@Public()` opens one, `@StaffOnly()` / `@CustomerOnly()` restrict by account type      |
+| Tenant-scoped endpoint         | `@TenantScoped()` (or `@TenantScoped('OWNER', 'MANAGER')`); data through `TenantPrismaService.runInCurrent()`; repository methods take `tenantId` first  |
+| New tenant table               | `tenant_id` + FK, indexes starting with it, and `ENABLE ROW LEVEL SECURITY` + `tenant_isolation` policy in the migration                                 |
+| Create a staff user            | Insert `User` (`PENDING_SETUP`, no password), then `AccountSetupService.createSetupLink(userId, tx)` in the same transaction; email the URL after commit |
+| Configuration / env validation | `@nestjs/config`                                                                                                                                         |
+| Database                       | `@nestjs/typeorm` or `@nestjs/drizzle` in its own module                                                                                                 |
+| Rate limiting tweaks           | `@SkipThrottle()` / `@Throttle()` on the route; global limits via `THROTTLE_*` env                                                                       |
+| Send an email                  | `EmailService.enqueue()`; new emails: template + `Mailable` + `MAILS` entry (see Email)                                                                  |
+| Background job                 | `BullModule.registerQueue()` + a `@Processor` in the feature module (see Background jobs)                                                                |
+| Database table                 | Model in `prisma/schema.prisma` → `npm run db:migrate -- --name …` → repository in the feature module                                                    |
+| Third-party integration        | A shared module in `src/shared/<integration>/` that owns and exports the client + a health indicator                                                     |
+| API docs for an endpoint       | `@ApiTags`, `@ApiOperation`, `@ApiOkResponse`/`@ApiResponse` from `@nestjs/swagger` on the controller                                                    |
 
 ## Configuration
 
@@ -344,26 +446,36 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 
 ### Variables
 
-| Variable             | Used by                                                     | Default                                                                   |
-| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `PORT`               | `main.ts`                                                   | `3000`                                                                    |
-| `NODE_ENV`           | `ObserveModule` — telemetry is on only when `production`    | unset (telemetry off)                                                     |
-| `OBSERVE_APP_KEY`    | `ObserveModule`                                             | placeholder                                                               |
-| `OBSERVE_APP_SECRET` | `ObserveModule`                                             | placeholder                                                               |
-| `LOG_LEVEL`          | pino logger (`LoggingModule`)                               | `info` in production, `debug` otherwise                                   |
-| `SWAGGER_ENABLED`    | `main.ts` — serve Swagger UI at `/docs`                     | on unless `NODE_ENV=production`                                           |
-| `REDIS_URL`          | `SharedRedisModule`, `SharedQueueModule`                    | `redis://localhost:6379`                                                  |
-| `QUEUE_PREFIX`       | `SharedQueueModule` — Redis key prefix for BullMQ           | `bull`                                                                    |
-| `MAIL_TRANSPORT`     | `SharedMailModule` — `smtp`, `log` or `file`                | `smtp`                                                                    |
-| `SMTP_URL`           | `SharedMailModule` — SMTP server                            | `smtp://localhost:1025` (Mailpit)                                         |
-| `SMTP_STARTTLS`      | `SharedMailModule` — `required` / `opportunistic` / `never` | `required`, `opportunistic` on localhost                                  |
-| `MAIL_FROM`          | `SharedMailModule` — default sender                         | `Backend <no-reply@example.com>`                                          |
-| `DATABASE_URL`       | `PrismaService`, Prisma CLI — PostgreSQL connection string  | docker Postgres `localhost:5433/homeease-dev`; **required in production** |
-| `DATABASE_POOL_MAX`  | `PrismaService` — max pool connections per process          | `10`                                                                      |
-| `THROTTLE_TTL_MS`    | `RateLimitModule` — window length                           | `60000`                                                                   |
-| `THROTTLE_LIMIT`     | `RateLimitModule` — requests per window per IP per route    | `100`                                                                     |
-| `TRUST_PROXY`        | `configureApp()` — proxy hop count for the client IP        | unset (don't trust `X-Forwarded-For`)                                     |
-| `SHUTDOWN_GRACE_MS`  | `HealthModule` — `/ready` answers 503 this long on SIGTERM  | `2000`                                                                    |
+| Variable                  | Used by                                                                               | Default                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `PORT`                    | `main.ts`                                                                             | `3000`                                                                    |
+| `NODE_ENV`                | `ObserveModule` — telemetry is on only when `production`                              | unset (telemetry off)                                                     |
+| `OBSERVE_APP_KEY`         | `ObserveModule`                                                                       | placeholder                                                               |
+| `OBSERVE_APP_SECRET`      | `ObserveModule`                                                                       | placeholder                                                               |
+| `LOG_LEVEL`               | pino logger (`LoggingModule`)                                                         | `info` in production, `debug` otherwise                                   |
+| `SWAGGER_ENABLED`         | `main.ts` — serve Swagger UI at `/docs`                                               | on unless `NODE_ENV=production`                                           |
+| `REDIS_URL`               | `SharedRedisModule`, `SharedQueueModule`                                              | `redis://localhost:6379`                                                  |
+| `QUEUE_PREFIX`            | `SharedQueueModule` — Redis key prefix for BullMQ                                     | `bull`                                                                    |
+| `MAIL_TRANSPORT`          | `SharedMailModule` — `smtp`, `log` or `file`                                          | `smtp`                                                                    |
+| `SMTP_URL`                | `SharedMailModule` — SMTP server                                                      | `smtp://localhost:1025` (Mailpit)                                         |
+| `SMTP_STARTTLS`           | `SharedMailModule` — `required` / `opportunistic` / `never`                           | `required`, `opportunistic` on localhost                                  |
+| `MAIL_FROM`               | `SharedMailModule` — default sender                                                   | `Backend <no-reply@example.com>`                                          |
+| `DATABASE_URL`            | `PrismaService`, Prisma CLI — PostgreSQL connection string                            | docker Postgres `localhost:5433/slotwise-dev`; **required in production** |
+| `DATABASE_POOL_MAX`       | `PrismaService` — max pool connections per process                                    | `10`                                                                      |
+| `JWT_SECRET`              | `AuthModule` — HS256 key for access tokens, 32+ bytes                                 | public dev-only value; **required in production**                         |
+| `ACCESS_TOKEN_TTL`        | `AuthModule` — access-token lifetime                                                  | `15m`                                                                     |
+| `REFRESH_TOKEN_TTL`       | `AuthModule` — one refresh token's lifetime (families: 90 d)                          | `30d`                                                                     |
+| `AUTH_THROTTLE_LIMIT`     | `AuthModule` — sign-in / magic-link / reset attempts per minute, per IP and per email | `5`                                                                       |
+| `APP_URL`                 | `AuthModule` — web app base URL for emailed links                                     | `http://localhost:5173`                                                   |
+| `DATABASE_APP_ROLE`       | `PrismaService` — role the app switches to (RLS applies)                              | `slotwise_app`                                                            |
+| `DATABASE_ADMIN_ROLE`     | `AdminPrismaService` — BYPASSRLS role, admin/job code only                            | `slotwise_admin`                                                          |
+| `PLATFORM_ADMIN_EMAIL`    | Seed only (`npm run db:seed`) — the platform admin's email                            | unset (the seed refuses to run)                                           |
+| `PLATFORM_ADMIN_PASSWORD` | Seed only — 10+ characters, not a breached password                                   | unset (the seed refuses to run)                                           |
+| `PLATFORM_ADMIN_NAME`     | Seed only — display name                                                              | `Platform Admin`                                                          |
+| `THROTTLE_TTL_MS`         | `RateLimitModule` — window length                                                     | `60000`                                                                   |
+| `THROTTLE_LIMIT`          | `RateLimitModule` — requests per window per IP per route                              | `100`                                                                     |
+| `TRUST_PROXY`             | `configureApp()` — proxy hop count for the client IP                                  | unset (don't trust `X-Forwarded-For`)                                     |
+| `SHUTDOWN_GRACE_MS`       | `HealthModule` — `/ready` answers 503 this long on SIGTERM                            | `2000`                                                                    |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 
@@ -378,12 +490,14 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 | --------------------------------- | --------------------------------------------------------------------------------------------- |
 | `docker compose up -d`            | Start local PostgreSQL (port 5433), Redis and Mailpit (required to run the app and e2e tests) |
 | `npm run db:migrate`              | Apply migrations to the dev database (first run, and after pulling schema changes)            |
+| `npm run db:seed`                 | Create the platform admin from `PLATFORM_ADMIN_*` (`-- --reset-password` to re-hash)          |
 | `npm run start:dev`               | Watch mode, loads `.env`                                                                      |
 | `npm run build`                   | `nest build` → compiles `src/` to `dist/` using `tsconfig.build.json` (specs excluded)        |
 | `npm run start:prod`              | Runs the compiled `dist/main.js`                                                              |
 | `npm test`                        | Unit tests (`**/*.spec.ts`)                                                                   |
 | `npm run test:e2e`                | E2E tests (`**/*.e2e-spec.ts`) — boots the full `AppModule` against real Redis over HTTP      |
-| `npm run lint` / `npm run format` | oxlint / Prettier                                                                             |
+| `npm run lint` / `npm run format` | oxlint / Prettier (`format:check` in CI)                                                      |
+| `npm run typecheck`               | `tsc --noEmit` over `src/`, `test/` and `prisma/`                                             |
 
 ## Testing layers
 
@@ -393,7 +507,7 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 
 | Store      | E2E uses                                                   | Before the run                            | After the run (pass or fail)                            |
 | ---------- | ---------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| PostgreSQL | database `homeease-test` (`TEST_DATABASE_URL` to override) | created if missing, migrations applied    | every table truncated (schema + migration history kept) |
+| PostgreSQL | database `slotwise-test` (`TEST_DATABASE_URL` to override) | created if missing, migrations applied    | every table truncated (schema + migration history kept) |
 | Redis      | logical database 1 (`TEST_REDIS_URL` to override)          | emptied (leftovers of an interrupted run) | emptied (`FLUSHDB`, never `FLUSHALL`)                   |
 
 Both setups refuse to run against a Postgres database without "test" in its name, or Redis database 0.

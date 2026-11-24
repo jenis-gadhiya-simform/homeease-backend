@@ -29,6 +29,10 @@
 
 ```bash
 $ npm install
+$ cp .env.example .env          # then set PLATFORM_ADMIN_PASSWORD (10+ chars)
+$ docker compose up -d          # PostgreSQL (5433), Redis, Mailpit
+$ npm run db:migrate            # create slotwise-dev and apply migrations
+$ npm run db:seed               # create the platform admin (the only seeded user)
 ```
 
 ## Compile and run the project
