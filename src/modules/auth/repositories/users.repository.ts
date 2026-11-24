@@ -128,6 +128,31 @@ export class UsersRepository {
     });
   }
 
+  /** The user's active memberships with each business, for `GET /me` (F04). */
+  async findMemberships(userId: string) {
+    const rows = await this.tenantPrisma.runAsUser(userId, (tx) =>
+      tx.membership.findMany({
+        where: { userId, status: 'ACTIVE' },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          role: true,
+          staffId: true,
+          tenant: {
+            select: { id: true, name: true, slug: true, status: true },
+          },
+        },
+      }),
+    );
+    return rows.map(({ tenant, role, staffId }) => ({
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      tenantSlug: tenant.slug,
+      tenantStatus: tenant.status,
+      role,
+      staffId,
+    }));
+  }
+
   /** The business the user was most recently added to (for the set-password page). */
   async findLatestBusinessName(userId: string): Promise<string | null> {
     const membership = await this.tenantPrisma.runAsUser(userId, (tx) =>

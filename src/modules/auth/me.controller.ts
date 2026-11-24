@@ -28,6 +28,7 @@ import {
 } from './auth.schemas.js';
 import type { CustomerPrincipal, Principal } from './auth.types.js';
 import { CustomerAuthService } from './customer-auth.service.js';
+import { UsersRepository } from './repositories/users.repository.js';
 
 /** The signed-in account (staff or customer). */
 @ApiTags('Me')
@@ -37,26 +38,39 @@ export class MeController {
   constructor(
     private readonly customerAuth: CustomerAuthService,
     private readonly authTokens: AuthTokensService,
+    private readonly users: UsersRepository,
   ) {}
 
   @Get()
   @ApiOperation({
     summary: 'The signed-in staff user or customer account',
-    description: 'Staff memberships (role per business) are added with F04.',
+    description:
+      'A staff user also gets `memberships`: their role in each business they are an active member of (F04).',
   })
   @ApiOkResponse({
     schema: {
       example: {
         kind: 'staff',
         id: '0193…',
-        email: 'admin@slotwise.local',
-        name: 'Platform Admin',
-        isPlatformAdmin: true,
+        email: 'maya@glow.example',
+        name: 'Maya Rao',
+        isPlatformAdmin: false,
+        memberships: [
+          {
+            tenantId: '0193…',
+            tenantName: 'Glow Salon',
+            tenantSlug: 'glow-salon',
+            tenantStatus: 'ACTIVE',
+            role: 'STAFF',
+            staffId: '0193…',
+          },
+        ],
       },
     },
   })
-  me(@CurrentUser() user: Principal) {
-    return user;
+  async me(@CurrentUser() user: Principal) {
+    if (user.kind !== 'staff') return user;
+    return { ...user, memberships: await this.users.findMemberships(user.id) };
   }
 
   @Post('password')

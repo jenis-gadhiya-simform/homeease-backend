@@ -28,6 +28,7 @@ export class PublicTenantsController {
         phone: '+919876543210',
         city: 'Ahmedabad',
         address: null,
+        staff: [{ id: '0193…', displayName: 'Maya Rao' }],
       },
     },
   })

@@ -14,7 +14,7 @@
 | [F01](./features/F01-tenancy.md)                               | Tenancy & business onboarding          | 1     | 1.10      | ✅ v1       |
 | [F02](./features/F02-authentication.md)                        | Authentication (password + magic link) | 1     | —         | ✅ v1       |
 | [F03](./features/F03-authorization.md)                         | Authorization (RBAC and ABAC)          | 1     | 1.10      | Not started |
-| [F04](./features/F04-staff-and-membership.md)                  | Team members & staff                   | 1     | 1.10      | Not started |
+| [F04](./features/F04-staff-and-membership.md)                  | Team members & staff                   | 1     | 1.10      | ✅ v1       |
 | [F05](./features/F05-catalog-and-schedules.md)                 | Services, hours, time off, holidays    | 1     | 1.12      | Not started |
 | [F06](./features/F06-availability-search.md)                   | Availability (free-slot search)        | 1     | 1.6, 1.12 | Not started |
 | [F07](./features/F07-bookings-and-concurrency.md)              | Bookings & concurrency                 | 1     | 1.8       | Not started |

@@ -1,6 +1,8 @@
 import type { Type } from '@nestjs/common';
 import type { Mailable } from '@nestjs/mail';
 import { MagicLinkMail } from './mails/magic-link.mail.js';
+import { MemberAddedMail } from './mails/member-added.mail.js';
+import { MemberWelcomeMail } from './mails/member-welcome.mail.js';
 import { OwnerAddedMail } from './mails/owner-added.mail.js';
 import { OwnerWelcomeMail } from './mails/owner-welcome.mail.js';
 import { PasswordResetMail } from './mails/password-reset.mail.js';
@@ -19,6 +21,8 @@ export const MAILS = {
   'password-reset': PasswordResetMail,
   'owner-welcome': OwnerWelcomeMail,
   'owner-added': OwnerAddedMail,
+  'member-welcome': MemberWelcomeMail,
+  'member-added': MemberAddedMail,
 } as const satisfies Record<string, Type<Mailable<any>>>;
 
 export type MailName = keyof typeof MAILS;

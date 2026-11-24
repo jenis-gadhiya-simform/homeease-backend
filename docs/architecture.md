@@ -70,6 +70,8 @@ backend/
 │       │   └── logger.module.ts # LoggingModule (nestjs-pino)
 │       ├── rate-limit/          # RateLimitModule: global ThrottlerGuard, Redis storage
 │       ├── tenancy/             # TenancyModule (F01): /admin/tenants, /tenants/current, /public/:slug, TenantGuard
+│       │   └── repositories/    # tenants, memberships, staff (exported for tenant features)
+│       ├── team/                # TeamModule (F04): /members (add, list, change role/bookable, remove, resend setup), /staff
 │       └── <feature>/
 │           ├── <feature>.module.ts
 │           ├── <feature>.controller.ts
@@ -391,6 +393,7 @@ Many businesses share one database. Every business-owned table has `tenant_id uu
 - `TenantPrismaService.run(tenantId, (tx) => …)` opens a transaction and runs `set_config('app.tenant_id', tenantId, true)` (transaction-local, so pooled connections never leak a tenant). `runInCurrent()` takes the tenant from `RequestContext`; `runAsUser(userId)` sets `app.user_id` to list a user's own memberships (policy `own_memberships`). Outside these, the app role sees **zero** tenant rows.
 - **`TenantGuard`** (`@TenantScoped(...roles)`) resolves the business for staff requests: `X-Tenant-Id` picks one of the user's active memberships (or the only one), suspended → 403 `TENANT_SUSPENDED`, not a member → 403 `NOT_A_MEMBER`, several and no header → 400 `TENANT_REQUIRED`; then `RequestContext.setActor({ tenantId, role })`.
 - Public pages take the business from the path (`/public/:slug`); a suspended business is a 404 there.
+- **Team (F04).** `membership` is a login's role in one business; `staff` is a bookable calendar, linked by `membership.staff_id` (STAFF always have one; other roles when `bookable`). Calendars are never deleted: removing a member or pausing a calendar sets `staff.active = false`. Who may add/change/remove whom lives in `team/team-roles.ts` (Owner → Manager, Receptionist, Staff; Manager → Receptionist, Staff); anything that would add, change or remove an OWNER is 422 `OWNERSHIP_TRANSFER_REQUIRED`. Invitation emails are capped per business by `MemberInviteLimiter` (`MEMBER_INVITE_LIMIT`/hour, Redis).
 - The `tenant` table itself has no `tenant_id` and no RLS (it is the public profile); `audit_log` is RLS'd and append-only for the app role (`INSERT`, `SELECT`).
 - **A new tenant table** needs, in its migration: `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and `CREATE POLICY tenant_isolation ON … USING (tenant_id = app_current_tenant_id()) WITH CHECK (tenant_id = app_current_tenant_id())`. Grants come from default privileges.
 - In production the login user in `DATABASE_URL` must be a member of both roles (the migration grants them to the migrating user); creating `slotwise_admin` with `BYPASSRLS` needs a superuser once.
@@ -467,6 +470,7 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 | `REFRESH_TOKEN_TTL`       | `AuthModule` — one refresh token's lifetime (families: 90 d)                          | `30d`                                                                     |
 | `AUTH_THROTTLE_LIMIT`     | `AuthModule` — sign-in / magic-link / reset attempts per minute, per IP and per email | `5`                                                                       |
 | `APP_URL`                 | `AuthModule` — web app base URL for emailed links                                     | `http://localhost:5173`                                                   |
+| `MEMBER_INVITE_LIMIT`     | `TeamModule` — add-member / resend-setup emails per business per hour (F04)           | `20`                                                                      |
 | `DATABASE_APP_ROLE`       | `PrismaService` — role the app switches to (RLS applies)                              | `slotwise_app`                                                            |
 | `DATABASE_ADMIN_ROLE`     | `AdminPrismaService` — BYPASSRLS role, admin/job code only                            | `slotwise_admin`                                                          |
 | `PLATFORM_ADMIN_EMAIL`    | Seed only (`npm run db:seed`) — the platform admin's email                            | unset (the seed refuses to run)                                           |

@@ -1,0 +1,7 @@
+Welcome to {{ businessName }}, {{ name }}!
+
+{{ addedBy }} added you to {{ businessName }} on SlotWise as {{ roleLabel }}. Choose a password to sign in:
+
+{{ actionUrl }}
+
+The link works once and expires in {{ expiresInHours }} hours. If it has expired, ask {{ addedBy }} for a new one.

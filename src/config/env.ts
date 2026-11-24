@@ -81,6 +81,8 @@ export const envSchema = z.object({
   REFRESH_TOKEN_TTL: duration.default('30d'),
   // Max sign-in / magic-link / password-reset attempts per minute, per IP and per email.
   AUTH_THROTTLE_LIMIT: positiveInt.default(5),
+  // Team invitation emails (add member + resend setup) per business per hour (F04).
+  MEMBER_INVITE_LIMIT: positiveInt.default(20),
   // Base URL of the web app; emailed links (account setup, magic link, reset) point here.
   APP_URL: urlWithProtocol('http', 'https').default('http://localhost:5173'),
 

@@ -4,6 +4,7 @@ import { EmailModule } from '../email/email.module.js';
 import { AdminTenantsController } from './admin-tenants.controller.js';
 import { PublicTenantsController } from './public-tenants.controller.js';
 import { MembershipsRepository } from './repositories/memberships.repository.js';
+import { StaffRepository } from './repositories/staff.repository.js';
 import { TenantsRepository } from './repositories/tenants.repository.js';
 import { TenantGuard } from './tenant.guard.js';
 import { TenantOnboardingService } from './tenant-onboarding.service.js';
@@ -25,10 +26,16 @@ import { TenantsService } from './tenants.service.js';
   providers: [
     TenantsRepository,
     MembershipsRepository,
+    StaffRepository,
     TenantGuard,
     TenantOnboardingService,
     TenantsService,
   ],
-  exports: [TenantGuard, TenantsRepository, MembershipsRepository],
+  exports: [
+    TenantGuard,
+    TenantsRepository,
+    MembershipsRepository,
+    StaffRepository,
+  ],
 })
 export class TenancyModule {}

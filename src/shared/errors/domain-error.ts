@@ -44,6 +44,19 @@ export const ErrorCode = {
   OwnerDisabled: 'OWNER_DISABLED',
   /** The Owner already set a password: use ownership transfer (F03) instead (409). */
   OwnerAlreadyActive: 'OWNER_ALREADY_ACTIVE',
+  // F04 team members & staff
+  /** The email already has an active membership in this business (409). */
+  AlreadyMember: 'ALREADY_MEMBER',
+  /** Adding an OWNER, changing a role to/from OWNER or removing the Owner: use ownership transfer (F03) (422). */
+  OwnershipTransferRequired: 'OWNERSHIP_TRANSFER_REQUIRED',
+  /** A platform admin's email can't be added to a business (422). */
+  MemberIsPlatformAdmin: 'MEMBER_IS_PLATFORM_ADMIN',
+  /** The email belongs to a disabled user (422). */
+  MemberDisabled: 'MEMBER_DISABLED',
+  /** Resend-setup for a member who has already set a password (409). */
+  MemberAlreadyActive: 'MEMBER_ALREADY_ACTIVE',
+  /** A member with role STAFF always has an active calendar (422). */
+  StaffMustBeBookable: 'STAFF_MUST_BE_BOOKABLE',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

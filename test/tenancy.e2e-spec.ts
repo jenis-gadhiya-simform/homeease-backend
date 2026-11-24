@@ -492,6 +492,7 @@ describe('Tenancy & onboarding (e2e)', () => {
         phone: '+919876543210',
         city: 'Ahmedabad',
         address: null,
+        staff: [],
       });
       await http().get('/public/no-such-biz').expect(404);
     });

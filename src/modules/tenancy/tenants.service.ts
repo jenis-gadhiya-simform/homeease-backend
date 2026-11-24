@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { RequestContext } from '../../shared/context/request-context.js';
 import { TenantPrismaService } from '../../shared/database/tenant-prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { StaffRepository } from './repositories/staff.repository.js';
 import {
   type TenantView,
   TenantsRepository,
@@ -14,6 +15,7 @@ export class TenantsService {
   constructor(
     private readonly tenantPrisma: TenantPrismaService,
     private readonly tenants: TenantsRepository,
+    private readonly staff: StaffRepository,
     private readonly audit: AuditService,
   ) {}
 
@@ -51,19 +53,24 @@ export class TenantsService {
 
   /**
    * The public profile behind `/public/:slug`. A suspended or unknown
-   * business is the same 404. Services and staff are added by F04 / F05.
+   * business is the same 404. Lists the active staff calendars (F04); a
+   * deactivated one disappears at once. Services are added by F05.
    */
   async publicProfile(slug: string) {
     const tenant = await this.tenants.findBySlug(slug);
     if (!tenant || tenant.status !== 'ACTIVE') {
       throw new NotFoundException('Business not found');
     }
+    const staff = await this.tenantPrisma.run(tenant.id, (tx) =>
+      this.staff.listPublic(tenant.id, tx),
+    );
     return {
       slug: tenant.slug,
       name: tenant.name,
       phone: tenant.phone,
       city: tenant.city,
       address: tenant.address,
+      staff,
     };
   }
 

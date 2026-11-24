@@ -1,0 +1,5 @@
+You've been added to {{ businessName }}
+
+Hi {{ name }}, {{ addedBy }} added you to {{ businessName }} on SlotWise as {{ roleLabel }}. Sign in with your existing password and pick it from your businesses:
+
+{{ actionUrl }}

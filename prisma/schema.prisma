@@ -183,6 +183,7 @@ model Tenant {
   updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   memberships Membership[]
+  staff       Staff[]
 
   @@map("tenant")
 }
@@ -212,6 +213,8 @@ model Membership {
   tenantId  String           @map("tenant_id") @db.Uuid
   userId    String           @map("user_id") @db.Uuid
   role      MemberRole
+  /// Set when this member is (or was) bookable: their calendar (F04).
+  staffId   String?          @unique @map("staff_id") @db.Uuid
   status    MembershipStatus @default(ACTIVE)
   createdBy String?          @map("created_by") @db.Uuid
   createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -219,10 +222,30 @@ model Membership {
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   user   User   @relation(fields: [userId], references: [id])
+  staff  Staff? @relation(fields: [staffId], references: [id])
 
   @@unique([tenantId, userId])
   @@index([userId])
   @@map("membership")
+}
+
+/// A bookable calendar (F04), separate from logins. Every STAFF member has
+/// one; Owners, Managers and Receptionists may (`bookable`). Never deleted:
+/// removing a member or pausing a calendar sets `active = false`, so past
+/// bookings keep their staff.
+model Staff {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  displayName String   @map("display_name")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  membership Membership?
+
+  @@index([tenantId, active])
+  @@map("staff")
 }
 
 /// Who did what, when (F09). Written in the same transaction as the change.

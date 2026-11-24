@@ -14,6 +14,7 @@ import { EmailModule } from '../email/email.module.js';
 import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
 import { RateLimitModule } from '../rate-limit/rate-limit.module.js';
+import { TeamModule } from '../team/team.module.js';
 import { TenancyModule } from '../tenancy/tenancy.module.js';
 import { env, isProduction } from '../../config/env.js';
 
@@ -41,6 +42,7 @@ import { env, isProduction } from '../../config/env.js';
     EmailModule,
     AuditModule,
     TenancyModule,
+    TeamModule,
   ],
   controllers: [AppController],
   providers: [
