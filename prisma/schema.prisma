@@ -89,8 +89,36 @@ model CustomerAccount {
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   magicLinkTokens MagicLinkToken[]
+  identities      CustomerIdentity[]
 
   @@map("customer_account")
+}
+
+/// External sign-in providers a customer can link (F02 v2).
+enum IdentityProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+/// A Google / Microsoft identity linked to a customer account (F02 v2).
+/// Global like CustomerAccount (no tenant_id). Matched by (provider, subject)
+/// only, never by email. Provider tokens are not stored.
+model CustomerIdentity {
+  id         String           @id @default(uuid(7)) @db.Uuid
+  accountId  String           @map("account_id") @db.Uuid
+  provider   IdentityProvider
+  /// The provider's stable `sub` claim.
+  subject    String
+  /// As the provider reported it when linked (lowercased); informational only.
+  email      String?
+  createdAt  DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastUsedAt DateTime?        @map("last_used_at") @db.Timestamptz(3)
+
+  account CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@unique([accountId, provider])
+  @@map("customer_identity")
 }
 
 /// What a MagicLinkToken is for (F02).

@@ -18,6 +18,13 @@ export interface AccessTokenResponse {
   expiresIn: number;
 }
 
+/** The `method` the package records on the refresh-token family. */
+const PACKAGE_SIGN_IN_METHOD = {
+  [SignInMethod.PASSWORD]: 'password',
+  [SignInMethod.EMAIL_LINK]: 'email-link',
+  [SignInMethod.OIDC]: 'oidc',
+} as const satisfies Record<SignInMethod, string>;
+
 const UNIT_MS = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const;
 
 /** `30d` → milliseconds (the env schema guarantees the format). */
@@ -68,7 +75,7 @@ export class AuthTokensService {
     };
     const pair = await this.tokens.issue(principal.id, {
       claims: { ...claims },
-      method: method === SignInMethod.PASSWORD ? 'password' : 'email-link',
+      method: PACKAGE_SIGN_IN_METHOD[method],
     });
     this.setRefreshCookie(res, pair.refreshToken);
     return this.toResponse(pair);

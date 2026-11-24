@@ -61,7 +61,7 @@ backend/
 │       │   ├── app.controller.ts      # Sample controller (GET /)
 │       │   ├── app.service.ts         # Sample service
 │       │   └── app.controller.spec.ts
-│       ├── auth/                # AuthModule (F02): global JWT guard, sign-in, account setup, magic link, reset, /me
+│       ├── auth/                # AuthModule (F02): global JWT guard, sign-in, account setup, magic link, reset, /me; social/ = Google/Microsoft (v2)
 │       │   └── repositories/    # users, customer accounts, setup/magic-link tokens, PrismaRefreshTokenStore
 │       ├── audit/               # AuditModule (global): AuditService.record(tx, …) — F09 table only
 │       ├── email/               # EmailModule: mails/, EmailService, EmailProcessor, dev routes
@@ -72,6 +72,7 @@ backend/
 │       ├── tenancy/             # TenancyModule (F01): /admin/tenants, /tenants/current, /public/:slug, TenantGuard
 │       │   └── repositories/    # tenants, memberships, staff (exported for tenant features)
 │       ├── team/                # TeamModule (F04): /members (add, list, change role/bookable, remove, resend setup), /staff
+│       ├── maintenance/         # MaintenanceModule (F15): "maintenance" queue, nightly schedules (BullMQ job schedulers), worker, /admin/maintenance
 │       └── <feature>/
 │           ├── <feature>.module.ts
 │           ├── <feature>.controller.ts
@@ -267,6 +268,7 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 - **Tokens:** sign-in answers `{ accessToken, tokenType, expiresIn }`; the refresh token travels only in the `sw_refresh` cookie (httpOnly, `SameSite=Strict`, path `/auth`, `Secure` in production). `POST /auth/refresh` rotates it; a reused one revokes its whole family (401).
 - **Emailed links** (account setup 72 h, staff reset 30 min, magic link 15 min, customer reset 30 min) are 32 random bytes; only the SHA-256 is stored, spending one is a single conditional `UPDATE … WHERE used_at IS NULL`, and a dead link is `410 LINK_EXPIRED`. Links point at `APP_URL`.
 - **No enumeration:** wrong email, wrong password, pending and disabled users get the same `401 INVALID_CREDENTIALS` after the same hash work (`PasswordHasher.verify()` against a dummy hash); magic-link and forgot-password always answer `202`.
+- **Social sign-in (F02 v2):** customers only, Google and Microsoft (personal accounts), in `src/modules/auth/social/`. The package's `OidcService` does the protocol (PKCE, `state` bound to the browser by the `__Host-oidc_tx` cookie, nonce, ID-token checks); our `OidcProfileCapture` resolver hands the verified profile back before the package would create a server-side session, and `SocialSignInService` applies the account rules and issues our usual tokens (`sw_refresh`), never a token in a URL. Identities live in `customer_identity`, matched by `(provider, subject)`; logins in progress, their context and link intents live in Redis. SlotWise has no sessions: `NoSessionStore` satisfies the package's production storage check and fails loudly if anything tries to create one. A provider is on only when all its settings are set (Google: id + secret; Microsoft: id + secret + tenant). Request logs redact `code`, `state` and `intent` (`redactUrl()`). See [F02 v2](./features/F02-authentication.md#v2--social-sign-in-for-customers-google-microsoft).
 - Read the user with `@CurrentUser()` in controllers, or `RequestContext.actor()` anywhere. Tests: override `PasswordHasher` with `new PasswordHasher({ logN: 10 })` (see `test/support/auth-app.ts`).
 
 ### Rate limiting
@@ -277,6 +279,10 @@ Both are excluded from rate limiting, request logs and Observe traces. On `SIGTE
 - **Fails open:** if Redis errors, the request is allowed and the error logged (`FailOpenThrottlerStorage`), so a Redis outage doesn't take the API down. `/ready` reports Redis down at the same time.
 - Behind a load balancer, set `TRUST_PROXY` (hop count) or every client shares the proxy's IP.
 - `AuthModule` is imported **before** `RateLimitModule`, so authentication runs first. Sign-in, magic-link and password-reset routes are also limited to `AUTH_THROTTLE_LIMIT` (5) per minute per IP (`@Throttle`) **and** per email (`AuthRateLimiter`, Redis, fails open).
+
+### CORS
+
+The web app (`APP_URL`) runs on another origin than the API (another port in dev, another subdomain in production). `configureApp()` enables CORS for **that origin only**, with credentials, so the browser sends the httpOnly `sw_refresh` cookie on `fetch(…, { credentials: 'include' })` to `/auth/refresh` and `/auth/logout`. Other origins get no CORS headers, so browsers keep their pages from reading responses. Allowed request headers: `Authorization`, `Content-Type`, `X-Tenant-Id`, `X-Request-Id`; exposed: `X-Request-Id`, `Retry-After`; preflights cached 10 min. The cookie's `SameSite=Strict` still requires the web app and the API to be **same-site** (e.g. `app.slotwise.in` + `api.slotwise.in`, or `localhost` on two ports).
 
 ### Security headers
 
@@ -327,6 +333,16 @@ export class EmailsProcessor extends WorkerHost {
 - Pass a `jobId` derived from the work (`welcome-${userId}`) so the same job isn't queued twice. BullMQ rejects ids containing `:`.
 - Override defaults per queue (`registerQueue({ name, defaultJobOptions })`) or per job (`add(name, data, opts)`).
 - Workers run inside the API process for now. To scale them separately later, start a second entry point that imports only the feature modules with processors.
+
+**Scheduled jobs (F15):** use a BullMQ **job scheduler**, not an in-process cron. `MaintenanceScheduler` calls `queue.upsertJobScheduler(id, { pattern, tz: DISPLAY_TIMEZONE }, { name, data })` at startup. The schedule lives in Redis: re-registering on every start updates it in place, and Redis creates exactly one job per tick however many instances run, so no lock is needed. The job then goes through the queue like any other (retries, backoff, retention), and its return value is stored on the job.
+
+| Job                          | Queue         | Schedule (IST)       | What it does                                                                                                                                                                                                                    |
+| ---------------------------- | ------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `purge-unverified-customers` | `maintenance` | daily 03:00 (21:30Z) | `UnverifiedAccountsCleanupService.purge()`: deletes customer accounts never verified, without password or linked provider, no magic link requested for `UNVERIFIED_ACCOUNT_RETENTION_DAYS`; batches of 500, at most 100 per run |
+
+- **To add a scheduled job:** add its name to `MaintenanceJob` and its cron pattern to `MAINTENANCE_SCHEDULES` (`maintenance.constants.ts`), then a `case` in `MaintenanceProcessor.process()` calling a service in the module that owns the data. A job that belongs to one feature (booking reminders, holds) gets its own queue in that feature's module instead.
+- **Platform admin:** `GET /admin/maintenance/schedules` (pattern, timezone, next run), `POST /admin/maintenance/jobs/:job/run` (run now, `202 { jobId }`), `GET /admin/maintenance/jobs/:jobId` (state, attempts, result, failure reason).
+- Processors open a `RequestContext` (`requestId: job-<id>`) so logs and errors carry an id.
 
 ### Email
 
@@ -449,37 +465,44 @@ To add a variable: add it to `envSchema` (with `.default()` or `.optional()`), t
 
 ### Variables
 
-| Variable                  | Used by                                                                               | Default                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `PORT`                    | `main.ts`                                                                             | `3000`                                                                    |
-| `NODE_ENV`                | `ObserveModule` — telemetry is on only when `production`                              | unset (telemetry off)                                                     |
-| `OBSERVE_APP_KEY`         | `ObserveModule`                                                                       | placeholder                                                               |
-| `OBSERVE_APP_SECRET`      | `ObserveModule`                                                                       | placeholder                                                               |
-| `LOG_LEVEL`               | pino logger (`LoggingModule`)                                                         | `info` in production, `debug` otherwise                                   |
-| `SWAGGER_ENABLED`         | `main.ts` — serve Swagger UI at `/docs`                                               | on unless `NODE_ENV=production`                                           |
-| `REDIS_URL`               | `SharedRedisModule`, `SharedQueueModule`                                              | `redis://localhost:6379`                                                  |
-| `QUEUE_PREFIX`            | `SharedQueueModule` — Redis key prefix for BullMQ                                     | `bull`                                                                    |
-| `MAIL_TRANSPORT`          | `SharedMailModule` — `smtp`, `log` or `file`                                          | `smtp`                                                                    |
-| `SMTP_URL`                | `SharedMailModule` — SMTP server                                                      | `smtp://localhost:1025` (Mailpit)                                         |
-| `SMTP_STARTTLS`           | `SharedMailModule` — `required` / `opportunistic` / `never`                           | `required`, `opportunistic` on localhost                                  |
-| `MAIL_FROM`               | `SharedMailModule` — default sender                                                   | `Backend <no-reply@example.com>`                                          |
-| `DATABASE_URL`            | `PrismaService`, Prisma CLI — PostgreSQL connection string                            | docker Postgres `localhost:5433/slotwise-dev`; **required in production** |
-| `DATABASE_POOL_MAX`       | `PrismaService` — max pool connections per process                                    | `10`                                                                      |
-| `JWT_SECRET`              | `AuthModule` — HS256 key for access tokens, 32+ bytes                                 | public dev-only value; **required in production**                         |
-| `ACCESS_TOKEN_TTL`        | `AuthModule` — access-token lifetime                                                  | `15m`                                                                     |
-| `REFRESH_TOKEN_TTL`       | `AuthModule` — one refresh token's lifetime (families: 90 d)                          | `30d`                                                                     |
-| `AUTH_THROTTLE_LIMIT`     | `AuthModule` — sign-in / magic-link / reset attempts per minute, per IP and per email | `5`                                                                       |
-| `APP_URL`                 | `AuthModule` — web app base URL for emailed links                                     | `http://localhost:5173`                                                   |
-| `MEMBER_INVITE_LIMIT`     | `TeamModule` — add-member / resend-setup emails per business per hour (F04)           | `20`                                                                      |
-| `DATABASE_APP_ROLE`       | `PrismaService` — role the app switches to (RLS applies)                              | `slotwise_app`                                                            |
-| `DATABASE_ADMIN_ROLE`     | `AdminPrismaService` — BYPASSRLS role, admin/job code only                            | `slotwise_admin`                                                          |
-| `PLATFORM_ADMIN_EMAIL`    | Seed only (`npm run db:seed`) — the platform admin's email                            | unset (the seed refuses to run)                                           |
-| `PLATFORM_ADMIN_PASSWORD` | Seed only — 10+ characters, not a breached password                                   | unset (the seed refuses to run)                                           |
-| `PLATFORM_ADMIN_NAME`     | Seed only — display name                                                              | `Platform Admin`                                                          |
-| `THROTTLE_TTL_MS`         | `RateLimitModule` — window length                                                     | `60000`                                                                   |
-| `THROTTLE_LIMIT`          | `RateLimitModule` — requests per window per IP per route                              | `100`                                                                     |
-| `TRUST_PROXY`             | `configureApp()` — proxy hop count for the client IP                                  | unset (don't trust `X-Forwarded-For`)                                     |
-| `SHUTDOWN_GRACE_MS`       | `HealthModule` — `/ready` answers 503 this long on SIGTERM                            | `2000`                                                                    |
+| Variable                            | Used by                                                                                             | Default                                                                          |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `PORT`                              | `main.ts`                                                                                           | `3000`                                                                           |
+| `NODE_ENV`                          | `ObserveModule` — telemetry is on only when `production`                                            | unset (telemetry off)                                                            |
+| `OBSERVE_APP_KEY`                   | `ObserveModule`                                                                                     | placeholder                                                                      |
+| `OBSERVE_APP_SECRET`                | `ObserveModule`                                                                                     | placeholder                                                                      |
+| `LOG_LEVEL`                         | pino logger (`LoggingModule`)                                                                       | `info` in production, `debug` otherwise                                          |
+| `SWAGGER_ENABLED`                   | `main.ts` — serve Swagger UI at `/docs`                                                             | on unless `NODE_ENV=production`                                                  |
+| `REDIS_URL`                         | `SharedRedisModule`, `SharedQueueModule`                                                            | `redis://localhost:6379`                                                         |
+| `QUEUE_PREFIX`                      | `SharedQueueModule` — Redis key prefix for BullMQ                                                   | `bull`                                                                           |
+| `MAIL_TRANSPORT`                    | `SharedMailModule` — `smtp`, `log` or `file`                                                        | `smtp`                                                                           |
+| `SMTP_URL`                          | `SharedMailModule` — SMTP server                                                                    | `smtp://localhost:1025` (Mailpit)                                                |
+| `SMTP_STARTTLS`                     | `SharedMailModule` — `required` / `opportunistic` / `never`                                         | `required`, `opportunistic` on localhost                                         |
+| `MAIL_FROM`                         | `SharedMailModule` — default sender                                                                 | `Backend <no-reply@example.com>`                                                 |
+| `DATABASE_URL`                      | `PrismaService`, Prisma CLI — PostgreSQL connection string                                          | docker Postgres `localhost:5433/slotwise-dev`; **required in production**        |
+| `DATABASE_POOL_MAX`                 | `PrismaService` — max pool connections per process                                                  | `10`                                                                             |
+| `JWT_SECRET`                        | `AuthModule` — HS256 key for access tokens, 32+ bytes                                               | public dev-only value; **required in production**                                |
+| `ACCESS_TOKEN_TTL`                  | `AuthModule` — access-token lifetime                                                                | `15m`                                                                            |
+| `REFRESH_TOKEN_TTL`                 | `AuthModule` — one refresh token's lifetime (families: 90 d)                                        | `30d`                                                                            |
+| `AUTH_THROTTLE_LIMIT`               | `AuthModule` — sign-in / magic-link / reset attempts per minute, per IP and per email               | `5`                                                                              |
+| `APP_URL`                           | `AuthModule`, CORS — web app base URL: emailed links, social sign-in landings, the only CORS origin | `http://localhost:5173`                                                          |
+| `API_URL`                           | `AuthModule` — public API base URL; social sign-in callback URLs                                    | `http://localhost:3000`                                                          |
+| `GOOGLE_CLIENT_ID`                  | `AuthModule` — Google sign-in for customers (with the secret)                                       | unset (Google off)                                                               |
+| `GOOGLE_CLIENT_SECRET`              | `AuthModule` — its secret                                                                           | unset                                                                            |
+| `MICROSOFT_CLIENT_ID`               | `AuthModule` — Microsoft sign-in for customers (with the secret)                                    | unset (Microsoft off)                                                            |
+| `MICROSOFT_CLIENT_SECRET`           | `AuthModule` — its secret                                                                           | unset                                                                            |
+| `MICROSOFT_TENANT_ID`               | `AuthModule` — Entra tenant GUID; Microsoft is on only with client id + secret + tenant             | unset (Microsoft off); personal accounts: `9188040d-6c67-4c5b-b112-36a304b66dad` |
+| `MEMBER_INVITE_LIMIT`               | `TeamModule` — add-member / resend-setup emails per business per hour (F04)                         | `20`                                                                             |
+| `UNVERIFIED_ACCOUNT_RETENTION_DAYS` | Nightly cleanup (F15) — delete never-verified, unused customer accounts after this many days        | `7`                                                                              |
+| `DATABASE_APP_ROLE`                 | `PrismaService` — role the app switches to (RLS applies)                                            | `slotwise_app`                                                                   |
+| `DATABASE_ADMIN_ROLE`               | `AdminPrismaService` — BYPASSRLS role, admin/job code only                                          | `slotwise_admin`                                                                 |
+| `PLATFORM_ADMIN_EMAIL`              | Seed only (`npm run db:seed`) — the platform admin's email                                          | unset (the seed refuses to run)                                                  |
+| `PLATFORM_ADMIN_PASSWORD`           | Seed only — 10+ characters, not a breached password                                                 | unset (the seed refuses to run)                                                  |
+| `PLATFORM_ADMIN_NAME`               | Seed only — display name                                                                            | `Platform Admin`                                                                 |
+| `THROTTLE_TTL_MS`                   | `RateLimitModule` — window length                                                                   | `60000`                                                                          |
+| `THROTTLE_LIMIT`                    | `RateLimitModule` — requests per window per IP per route                                            | `100`                                                                            |
+| `TRUST_PROXY`                       | `configureApp()` — proxy hop count for the client IP                                                | unset (don't trust `X-Forwarded-For`)                                            |
+| `SHUTDOWN_GRACE_MS`                 | `HealthModule` — `/ready` answers 503 this long on SIGTERM                                          | `2000`                                                                           |
 
 `npm start`, `start:dev` and `start:debug` load `.env` with `--env-file .env`. `npm run start:prod` (`node dist/main`) does **not**, so in production the variables must come from the real environment.
 

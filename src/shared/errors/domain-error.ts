@@ -29,6 +29,17 @@ export const ErrorCode = {
   ReauthenticationRequired: 'REAUTHENTICATION_REQUIRED',
   /** A customer token on a staff endpoint, or the reverse. */
   WrongAccountType: 'WRONG_ACCOUNT_TYPE',
+  // F02 v2 social sign-in (also sent as `?error=` on browser redirects)
+  /** The provider login failed: bad state, expired login, provider error, invalid ID token, cancelled. */
+  SocialSignInFailed: 'SOCIAL_SIGN_IN_FAILED',
+  /** The provider didn't assert a verified email, so it can't create or join an account by email. */
+  EmailNotVerified: 'EMAIL_NOT_VERIFIED',
+  /** An account with this email exists but can't be joined automatically: sign in and link from the account. */
+  AccountLinkRequired: 'ACCOUNT_LINK_REQUIRED',
+  /** This Google / Microsoft account is already linked to another customer account. */
+  IdentityInUse: 'IDENTITY_IN_USE',
+  /** The account already has a different account of this provider linked: unlink it first. */
+  ProviderAlreadyLinked: 'PROVIDER_ALREADY_LINKED',
   // F01 tenancy
   /** Another business already uses this slug. */
   SlugTaken: 'SLUG_TAKEN',

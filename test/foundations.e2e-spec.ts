@@ -63,6 +63,53 @@ describe('Platform foundations (e2e)', () => {
     await app.close();
   });
 
+  describe('CORS', () => {
+    const webApp = 'http://localhost:5173'; // APP_URL default
+
+    it('lets the web app call the API with credentials (preflight)', async () => {
+      const res = await request(app.getHttpServer())
+        .options('/auth/refresh')
+        .set('Origin', webApp)
+        .set('Access-Control-Request-Method', 'POST')
+        .set('Access-Control-Request-Headers', 'authorization,content-type')
+        .expect(204);
+
+      expect(res.headers['access-control-allow-origin']).toBe(webApp);
+      expect(res.headers['access-control-allow-credentials']).toBe('true');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+      expect(res.headers['access-control-allow-headers']).toContain(
+        'Authorization',
+      );
+    });
+
+    it('marks actual responses for the web app and exposes the request id', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/health')
+        .set('Origin', webApp)
+        .expect(200);
+
+      expect(res.headers['access-control-allow-origin']).toBe(webApp);
+      expect(res.headers['access-control-allow-credentials']).toBe('true');
+      expect(res.headers['access-control-expose-headers']).toContain(
+        'X-Request-Id',
+      );
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('gives no other origin CORS access', async () => {
+      const preflight = await request(app.getHttpServer())
+        .options('/auth/refresh')
+        .set('Origin', 'https://evil.example')
+        .set('Access-Control-Request-Method', 'POST');
+      expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
+
+      const res = await request(app.getHttpServer())
+        .get('/health')
+        .set('Origin', 'https://evil.example');
+      expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    });
+  });
+
   describe('error envelope', () => {
     it('answers a domain error with its code and the request id', async () => {
       const res = await request(app.getHttpServer())

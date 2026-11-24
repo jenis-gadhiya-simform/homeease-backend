@@ -8,6 +8,24 @@ import type { LoggerOptions } from 'pino';
 import { env, isProduction } from '../../config/env.js';
 import { resolveRequestId } from '../../shared/context/request-context.js';
 
+/** Query parameters that are one-time secrets (OIDC callback, link intents, F02 v2). */
+const SECRET_QUERY_PARAMS = ['code', 'state', 'intent', 'id_token'];
+
+/** The request URL with secret query values replaced, so log lines can't replay a login. */
+export function redactUrl(url: string): string {
+  const queryStart = url.indexOf('?');
+  if (queryStart === -1) return url;
+  const params = new URLSearchParams(url.slice(queryStart + 1));
+  let changed = false;
+  for (const name of SECRET_QUERY_PARAMS) {
+    if (params.has(name)) {
+      params.set(name, '[REDACTED]');
+      changed = true;
+    }
+  }
+  return changed ? `${url.slice(0, queryStart)}?${params.toString()}` : url;
+}
+
 /**
  * Structured logging with pino (via nestjs-pino).
  *
@@ -72,7 +90,7 @@ export function buildLoggerParams(tracer: TracerService): Params {
       req: (req: { id: string; method: string; url: string }) => ({
         id: req.id,
         method: req.method,
-        url: req.url,
+        url: redactUrl(req.url),
       }),
       res: (res: { statusCode: number }) => ({ statusCode: res.statusCode }),
     },

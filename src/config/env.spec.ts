@@ -134,4 +134,50 @@ describe('parseEnv', () => {
     );
     expect(() => parseEnv({ APP_URL: 'ftp://x' })).toThrow(/APP_URL/);
   });
+
+  it('leaves social sign-in off by default, with no Microsoft tenant', () => {
+    const env = parseEnv({});
+    expect(env.API_URL).toBe('http://localhost:3000');
+    expect(env.GOOGLE_CLIENT_ID).toBeUndefined();
+    expect(env.MICROSOFT_CLIENT_ID).toBeUndefined();
+    expect(env.MICROSOFT_TENANT_ID).toBeUndefined();
+  });
+
+  it('requires the Google client id and secret together', () => {
+    expect(() => parseEnv({ GOOGLE_CLIENT_ID: 'id' })).toThrow(
+      /GOOGLE_CLIENT_SECRET/,
+    );
+    expect(
+      parseEnv({ GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 'secret' }),
+    ).toMatchObject({ GOOGLE_CLIENT_ID: 'id' });
+  });
+
+  it('requires the Microsoft client id, secret and tenant together', () => {
+    const tenant = '9188040d-6c67-4c5b-b112-36a304b66dad';
+    // Id and secret without a tenant: the tenant is reported missing.
+    expect(() =>
+      parseEnv({ MICROSOFT_CLIENT_ID: 'id', MICROSOFT_CLIENT_SECRET: 's' }),
+    ).toThrow(/MICROSOFT_TENANT_ID/);
+    // A tenant alone: both client settings are reported missing.
+    expect(() => parseEnv({ MICROSOFT_TENANT_ID: tenant })).toThrow(
+      /MICROSOFT_CLIENT_ID[\s\S]*MICROSOFT_CLIENT_SECRET/,
+    );
+    expect(
+      parseEnv({
+        MICROSOFT_CLIENT_ID: 'id',
+        MICROSOFT_CLIENT_SECRET: 's',
+        MICROSOFT_TENANT_ID: tenant,
+      }),
+    ).toMatchObject({ MICROSOFT_TENANT_ID: tenant });
+  });
+
+  it('rejects a Microsoft tenant that is not a GUID', () => {
+    expect(() =>
+      parseEnv({
+        MICROSOFT_CLIENT_ID: 'id',
+        MICROSOFT_CLIENT_SECRET: 's',
+        MICROSOFT_TENANT_ID: 'common',
+      }),
+    ).toThrow(/MICROSOFT_TENANT_ID/);
+  });
 });

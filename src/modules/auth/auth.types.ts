@@ -28,6 +28,8 @@ export const SignInMethod = {
   PASSWORD: 'pwd',
   /** An emailed link (magic link). */
   EMAIL_LINK: 'email',
+  /** Google or Microsoft (OpenID Connect). */
+  OIDC: 'oidc',
 } as const;
 export type SignInMethod = (typeof SignInMethod)[keyof typeof SignInMethod];
 
@@ -40,7 +42,7 @@ export interface AccessTokenClaims {
   kind: PrincipalKind;
   /** Platform admin (informational; authorization reads `User.isPlatformAdmin`). */
   pa: boolean;
-  /** How the user signed in: `pwd` (password) or `email` (an emailed link). */
+  /** How the user signed in: `pwd` (password), `email` (an emailed link) or `oidc` (Google / Microsoft). */
   amr: SignInMethod[];
   /** Sign-in time, seconds since epoch; kept across refreshes. */
   auth_time: number;

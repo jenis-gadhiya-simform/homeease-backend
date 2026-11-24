@@ -23,6 +23,15 @@ const urlWithProtocol = (...protocols: string[]) =>
   z.url({ protocol: new RegExp(`^(${protocols.join('|')})$`) });
 
 /**
+ * Social sign-in settings that only work together (F02 v2): a provider is
+ * enabled when all of its group are set, and a partly set group is an error.
+ */
+const OAUTH_PROVIDER_GROUPS = [
+  ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+  ['MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT_ID'],
+] as const;
+
+/**
  * Every environment variable the app reads, validated once at startup.
  * Documented in docs/architecture.md (Configuration) and .env.example.
  */
@@ -86,10 +95,32 @@ export const envSchema = z.object({
   REFRESH_TOKEN_TTL: duration.default('30d'),
   // Max sign-in / magic-link / password-reset attempts per minute, per IP and per email.
   AUTH_THROTTLE_LIMIT: positiveInt.default(5),
+  // Customer accounts nobody ever verified or used (a magic link requested but
+  // never opened) are deleted by the nightly cleanup job after this many days (F15).
+  UNVERIFIED_ACCOUNT_RETENTION_DAYS: positiveInt.max(365).default(7),
   // Team invitation emails (add member + resend setup) per business per hour (F04).
   MEMBER_INVITE_LIMIT: positiveInt.default(20),
   // Base URL of the web app; emailed links (account setup, magic link, reset) point here.
   APP_URL: urlWithProtocol('http', 'https').default('http://localhost:5173'),
+  // Public base URL of this API: social sign-in callbacks registered with
+  // Google / Microsoft are `${API_URL}/auth/customer/oidc/<provider>/callback`.
+  API_URL: urlWithProtocol('http', 'https').default('http://localhost:3000'),
+
+  // Customer social sign-in (F02 v2). A provider is enabled only when all of
+  // its settings are set (Google: id + secret; Microsoft: id + secret + tenant).
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  MICROSOFT_CLIENT_ID: z.string().optional(),
+  MICROSOFT_CLIENT_SECRET: z.string().optional(),
+  // Entra tenant GUID, no default: personal Microsoft accounts are
+  // 9188040d-6c67-4c5b-b112-36a304b66dad, one organisation is its own GUID.
+  MICROSOFT_TENANT_ID: z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      'A tenant id (GUID), not a domain or common/consumers',
+    )
+    .optional(),
 
   // Platform admin, read only by the seed (`npm run db:seed`). In production
   // they come from the secret manager for the deploy step, not the app.
@@ -125,6 +156,17 @@ const appEnvSchema = envSchema
         path: ['JWT_SECRET'],
         message: 'Required in production',
       });
+    }
+    for (const group of OAUTH_PROVIDER_GROUPS) {
+      const set = group.filter((key) => value[key] !== undefined);
+      if (set.length === 0 || set.length === group.length) continue;
+      for (const key of group.filter((key) => value[key] === undefined)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `Required when ${set.join(' / ')} is set`,
+        });
+      }
     }
   })
   .transform((value) => ({

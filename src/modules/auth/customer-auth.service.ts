@@ -74,8 +74,8 @@ export class CustomerAuthService {
 
   /**
    * Sets or changes the password. With one already set, the current password
-   * is required; without one, the session must come from a magic link
-   * opened in the last 15 minutes.
+   * is required; without one, the session must come from a magic link (or a
+   * Google / Microsoft sign-in) in the last 15 minutes.
    */
   async changePassword(
     account: CustomerPrincipal,
@@ -95,7 +95,7 @@ export class CustomerAuthService {
           'The current password is incorrect',
         );
       }
-    } else if (!isFreshEmailSignIn(session, Date.now())) {
+    } else if (!isFreshPasswordlessSignIn(session, Date.now())) {
       throw new DomainError(
         HttpStatus.FORBIDDEN,
         ErrorCode.ReauthenticationRequired,
@@ -107,15 +107,21 @@ export class CustomerAuthService {
   }
 }
 
-/** The access token comes from a magic-link sign-in at most 15 minutes old. */
-export function isFreshEmailSignIn(
+/** Sign-ins that prove the person without a password: magic link, Google, Microsoft. */
+const PASSWORDLESS_METHODS: readonly unknown[] = [
+  SignInMethod.EMAIL_LINK,
+  SignInMethod.OIDC,
+];
+
+/** The access token comes from a passwordless sign-in at most 15 minutes old. */
+export function isFreshPasswordlessSignIn(
   claims: JwtClaims | null,
   nowMs: number,
 ): boolean {
   const amr = Array.isArray(claims?.amr) ? claims.amr : [];
   const authTime = claims?.auth_time;
   return (
-    amr.includes(SignInMethod.EMAIL_LINK) &&
+    amr.some((method) => PASSWORDLESS_METHODS.includes(method)) &&
     typeof authTime === 'number' &&
     nowMs - authTime * 1000 <= FRESH_SIGN_IN_MS
   );

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { passwordSchema } from '../../shared/security/password-policy.js';
 import { AccountKind } from '../../shared/context/request-context.js';
+import { SocialProvider } from './social/social-providers.js';
 
 /** Emails are compared and stored lowercased. */
 export const emailSchema = z
@@ -37,13 +38,16 @@ export type CompleteAccountSetupDto = z.infer<
   typeof completeAccountSetupSchema
 >;
 
+/** The business whose booking page the customer is on (validated in F01). */
+export const tenantSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9-]{3,40}$/)
+  .optional();
+
 export const magicLinkRequestSchema = z.object({
   email: emailSchema,
   /** The business whose booking page the customer is on (validated in F01). */
-  tenantSlug: z
-    .string()
-    .regex(/^[a-z0-9-]{3,40}$/)
-    .optional(),
+  tenantSlug: tenantSlugSchema,
 });
 export type MagicLinkRequestDto = z.infer<typeof magicLinkRequestSchema>;
 
@@ -73,3 +77,17 @@ export const changeCustomerPasswordSchema = z.object({
 export type ChangeCustomerPasswordDto = z.infer<
   typeof changeCustomerPasswordSchema
 >;
+
+// F02 v2 social sign-in
+
+export const socialProviderSchema = z.enum(SocialProvider);
+
+/** A path inside the web app (`/book/glow-salon`), never another site. */
+export const appRedirectPathSchema = z
+  .string()
+  .max(512)
+  .regex(/^\/(?![/\\])[^\s]*$/, 'A relative path starting with /')
+  .optional();
+
+/** A link intent from POST /me/identities/:provider/link. */
+export const linkIntentSchema = tokenSchema.optional();

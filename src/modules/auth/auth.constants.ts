@@ -21,4 +21,13 @@ export const LINK_PATHS = {
   staffPasswordReset: '/reset-password',
   magicLink: '/magic-link',
   customerPasswordReset: '/customer/reset-password',
+  /** Where social sign-in lands (`?redirectTo=` on success, `?error=` otherwise). */
+  socialCallback: '/auth/social/callback',
+  /** The customer's sign-in methods page, where linking lands. */
+  signInMethods: '/account/sign-in-methods',
 } as const;
+
+/** A social login, between the redirect to the provider and the callback. */
+export const SOCIAL_LOGIN_TTL_MS = 10 * 60 * 1000;
+/** A link intent (POST /me/identities/:provider/link) is single use, this long. */
+export const LINK_INTENT_TTL_MS = 5 * 60 * 1000;

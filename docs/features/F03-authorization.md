@@ -36,6 +36,8 @@ type Subject =
     };
 ```
 
+How a customer signed in (magic link, password, Google, Microsoft — [F02 v2](./F02-authentication.md#v2--social-sign-in-for-customers-google-microsoft)) does not change the subject: it is always the `CustomerAccount` id, and no policy may depend on the sign-in method.
+
 Role and membership come from the database on each request (cached ≤ 60 s), never from the token, so removing a member works immediately.
 
 ## Endpoint classification

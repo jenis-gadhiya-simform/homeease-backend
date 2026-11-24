@@ -31,9 +31,9 @@ This repository is the backend for the Node.js 201 PoC. It is built like a produ
 | **Manager**        | One business       | Services, staff, schedules and all bookings. No billing, no ownership transfer.                                                                                                                  |
 | **Receptionist**   | One business       | Creates, moves and cancels bookings for any staff member. Sees customer contact details.                                                                                                         |
 | **Staff**          | One business       | Sees and manages only **their own** calendar and bookings.                                                                                                                                       |
-| **Customer**       | Their own bookings | Books, pays, reschedules and cancels their own bookings. Signs in with a magic link or a password.                                                                                               |
+| **Customer**       | Their own bookings | Books, pays, reschedules and cancels their own bookings. Signs in with a magic link, a password, Google or Microsoft.                                                                            |
 
-Staff-side users sign in with **email + password**. Customers sign in with a **magic link or email + password**, whichever they prefer, and can set a password later from their account. Both use `@nestjs/authentication`.
+Staff-side users sign in with **email + password**. Customers sign in with a **magic link, email + password, Google or Microsoft** (personal accounts), whichever they prefer; they can set a password and link or unlink Google/Microsoft later from their account ([F02 v2](../features/F02-authentication.md#v2--social-sign-in-for-customers-google-microsoft)). Social sign-in is **customers only**. Both use `@nestjs/authentication`.
 
 ## Learning-module coverage
 
@@ -82,7 +82,7 @@ sequenceDiagram
 | Create business + Owner    | [F01](../features/F01-tenancy.md#onboarding-the-platform-admin-creates-the-business-and-its-owner) |
 | Owner adds team            | [F04](../features/F04-staff-and-membership.md)                                                     |
 
-Customers are the only users who sign up by themselves (magic link or password, F02).
+Customers are the only users who sign up by themselves (magic link, password, Google or Microsoft, F02).
 
 ## India-only time and money
 
