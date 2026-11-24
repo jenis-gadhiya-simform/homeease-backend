@@ -1,5 +1,10 @@
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client.js';
+import {
+  MemberRole,
+  MembershipStatus,
+  type Prisma,
+  UserStatus,
+} from '../../generated/prisma/client.js';
 import { RequestContext } from '../../shared/context/request-context.js';
 import {
   isPrismaError,
@@ -10,6 +15,7 @@ import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   AccountSetupService,
+  InviteEmailKind,
   type SetupLink,
 } from '../auth/account-setup.service.js';
 import { appLink } from '../auth/auth-links.js';
@@ -33,13 +39,13 @@ export interface OwnerView {
   id: string;
   email: string;
   name: string;
-  status: 'PENDING_SETUP' | 'ACTIVE' | 'DISABLED';
+  status: UserStatus;
 }
 
 /** What to email once the transaction has committed. */
 type OwnerEmail =
-  | { kind: 'welcome'; owner: OwnerView; link: SetupLink }
-  | { kind: 'added'; owner: OwnerView };
+  | { kind: typeof InviteEmailKind.WELCOME; owner: OwnerView; link: SetupLink }
+  | { kind: typeof InviteEmailKind.ADDED; owner: OwnerView };
 
 /**
  * Platform-admin onboarding (F01): the admin creates a business together
@@ -135,7 +141,7 @@ export class TenantOnboardingService {
     );
     await this.sendOwnerEmail(
       tenant,
-      { kind: 'welcome', owner, link },
+      { kind: InviteEmailKind.WELCOME, owner, link },
       `owner-setup-${owner.id}-${link.expiresAt.getTime()}`,
     );
     return { owner };
@@ -165,8 +171,12 @@ export class TenantOnboardingService {
         action: 'membership.removed',
         entityType: 'membership',
         entityId: current.id,
-        before: { userId: current.user.id, role: 'OWNER', status: 'ACTIVE' },
-        after: { status: 'REMOVED' },
+        before: {
+          userId: current.user.id,
+          role: MemberRole.OWNER,
+          status: MembershipStatus.ACTIVE,
+        },
+        after: { status: MembershipStatus.REMOVED },
         reason: 'Pending owner replaced',
       });
       await this.accountSetup.revokeLinks(current.user.id, tx);
@@ -176,7 +186,7 @@ export class TenantOnboardingService {
         tx,
       );
       if (elsewhere === 0) {
-        await this.users.setStatus(current.user.id, 'DISABLED', tx);
+        await this.users.setStatus(current.user.id, UserStatus.DISABLED, tx);
       }
 
       const email = await this.addOwner(tx, tenantId, dto);
@@ -208,7 +218,7 @@ export class TenantOnboardingService {
         'A platform admin cannot own a business: use another email',
       );
     }
-    if (existing?.status === 'DISABLED') {
+    if (existing?.status === UserStatus.DISABLED) {
       throw new DomainError(
         HttpStatus.UNPROCESSABLE_ENTITY,
         ErrorCode.OwnerDisabled,
@@ -221,7 +231,7 @@ export class TenantOnboardingService {
       tenantId,
       {
         userId: user.id,
-        role: 'OWNER',
+        role: MemberRole.OWNER,
         createdBy: RequestContext.actor()?.userId ?? null,
       },
       tx,
@@ -231,7 +241,7 @@ export class TenantOnboardingService {
       action: 'membership.created',
       entityType: 'membership',
       entityId: membership.id,
-      after: { userId: user.id, role: 'OWNER' },
+      after: { userId: user.id, role: MemberRole.OWNER },
     });
 
     const owner: OwnerView = {
@@ -241,11 +251,11 @@ export class TenantOnboardingService {
       status: user.status,
     };
     // An existing user who never finished setup keeps needing a link.
-    if (!existing || existing.status === 'PENDING_SETUP') {
+    if (!existing || existing.status === UserStatus.PENDING_SETUP) {
       const link = await this.accountSetup.createSetupLink(user.id, tx);
-      return { kind: 'welcome', owner, link };
+      return { kind: InviteEmailKind.WELCOME, owner, link };
     }
-    return { kind: 'added', owner };
+    return { kind: InviteEmailKind.ADDED, owner };
   }
 
   /** Enqueued only after commit: a rolled-back business never emails anyone. */
@@ -254,7 +264,7 @@ export class TenantOnboardingService {
     email: OwnerEmail,
     jobId: string,
   ) {
-    if (email.kind === 'welcome') {
+    if (email.kind === InviteEmailKind.WELCOME) {
       await this.emails.enqueue(
         'owner-welcome',
         email.owner.email,
@@ -289,7 +299,7 @@ export class TenantOnboardingService {
   private async pendingOwner(tenantId: string, tx: Tx) {
     const owner = await this.memberships.findOwner(tenantId, tx);
     if (!owner) throw new NotFoundException('This business has no Owner');
-    if (owner.user.status !== 'PENDING_SETUP') {
+    if (owner.user.status !== UserStatus.PENDING_SETUP) {
       throw new DomainError(
         HttpStatus.CONFLICT,
         ErrorCode.OwnerAlreadyActive,

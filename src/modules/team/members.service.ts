@@ -1,5 +1,10 @@
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import type { MemberRole, Prisma } from '../../generated/prisma/client.js';
+import {
+  MemberRole,
+  MembershipStatus,
+  type Prisma,
+  UserStatus,
+} from '../../generated/prisma/client.js';
 import {
   isPrismaError,
   PrismaErrorCode,
@@ -9,6 +14,7 @@ import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   AccountSetupService,
+  InviteEmailKind,
   type SetupLink,
 } from '../auth/account-setup.service.js';
 import { appLink } from '../auth/auth-links.js';
@@ -48,7 +54,7 @@ export interface MemberView {
   /** Has an active calendar. */
   bookable: boolean;
   /** Setup status of the user, or REMOVED once removed from this business. */
-  status: 'PENDING_SETUP' | 'ACTIVE' | 'DISABLED' | 'REMOVED';
+  status: UserStatus | typeof MembershipStatus.REMOVED;
   createdAt: Date;
 }
 
@@ -61,14 +67,18 @@ export function toMemberView(row: MemberRow): MemberView {
     role: row.role,
     staffId: row.staffId,
     bookable: row.staff?.active ?? false,
-    status: row.status === 'REMOVED' ? 'REMOVED' : row.user.status,
+    status:
+      row.status === MembershipStatus.REMOVED
+        ? MembershipStatus.REMOVED
+        : row.user.status,
     createdAt: row.createdAt,
   };
 }
 
 /** What to email once the transaction has committed. */
 type MemberEmail =
-  { kind: 'welcome'; link: SetupLink } | { kind: 'added'; at: Date };
+  | { kind: typeof InviteEmailKind.WELCOME; link: SetupLink }
+  | { kind: typeof InviteEmailKind.ADDED; at: Date };
 
 const staffMustBeBookable = () =>
   new DomainError(
@@ -106,14 +116,14 @@ export class MembersService {
    */
   async add(dto: AddMemberDto, addedBy: string): Promise<MemberView> {
     const actor = tenantActor();
-    if (dto.role === 'OWNER') {
+    if (dto.role === MemberRole.OWNER) {
       throw ownershipTransferRequired('An Owner cannot be added');
     }
     assertCanManageRole(actor.role, dto.role);
-    if (dto.role === 'STAFF' && dto.bookable === false) {
+    if (dto.role === MemberRole.STAFF && dto.bookable === false) {
       throw staffMustBeBookable();
     }
-    const bookable = dto.role === 'STAFF' || dto.bookable === true;
+    const bookable = dto.role === MemberRole.STAFF || dto.bookable === true;
     await this.limiter.hit(actor.tenantId);
 
     let result: { member: MemberView; email: MemberEmail };
@@ -156,7 +166,7 @@ export class MembersService {
       const role = dto.role ?? target.role;
       if (
         role !== target.role &&
-        (role === 'OWNER' || target.role === 'OWNER')
+        (role === MemberRole.OWNER || target.role === MemberRole.OWNER)
       ) {
         throw ownershipTransferRequired('The Owner role cannot be changed');
       }
@@ -164,9 +174,10 @@ export class MembersService {
       if (role !== target.role) assertCanManageRole(actor.role, role);
 
       const wasBookable = target.staff?.active ?? false;
-      const becomesStaff = role === 'STAFF' && target.role !== 'STAFF';
+      const becomesStaff =
+        role === MemberRole.STAFF && target.role !== MemberRole.STAFF;
       const bookable = dto.bookable ?? (becomesStaff || wasBookable);
-      if (role === 'STAFF' && !bookable) throw staffMustBeBookable();
+      if (role === MemberRole.STAFF && !bookable) throw staffMustBeBookable();
 
       let staffId = target.staffId;
       if (bookable && !wasBookable) {
@@ -222,7 +233,7 @@ export class MembersService {
     const actor = tenantActor();
     await this.tenantPrisma.run(actor.tenantId, async (tx) => {
       const target = await this.findActive(actor.tenantId, id, tx);
-      if (target.role === 'OWNER') {
+      if (target.role === MemberRole.OWNER) {
         throw ownershipTransferRequired('The Owner cannot be removed');
       }
       assertCanManageRole(actor.role, target.role);
@@ -242,8 +253,8 @@ export class MembersService {
         action: 'membership.removed',
         entityType: 'membership',
         entityId: id,
-        before: { role: target.role, status: 'ACTIVE' },
-        after: { status: 'REMOVED' },
+        before: { role: target.role, status: MembershipStatus.ACTIVE },
+        after: { status: MembershipStatus.REMOVED },
       });
     });
   }
@@ -259,7 +270,7 @@ export class MembersService {
       async (tx) => {
         const target = await this.findActive(actor.tenantId, id, tx);
         this.assertCanActOn(actor, target);
-        if (target.user.status !== 'PENDING_SETUP') {
+        if (target.user.status !== UserStatus.PENDING_SETUP) {
           throw new DomainError(
             HttpStatus.CONFLICT,
             ErrorCode.MemberAlreadyActive,
@@ -274,7 +285,7 @@ export class MembersService {
     await this.sendEmail(
       actor.tenantId,
       member,
-      { kind: 'welcome', link },
+      { kind: InviteEmailKind.WELCOME, link },
       addedBy,
     );
     return member;
@@ -294,7 +305,7 @@ export class MembersService {
         'A platform admin cannot join a business: use another email',
       );
     }
-    if (existing?.status === 'DISABLED') {
+    if (existing?.status === UserStatus.DISABLED) {
       throw new DomainError(
         HttpStatus.UNPROCESSABLE_ENTITY,
         ErrorCode.MemberDisabled,
@@ -306,7 +317,7 @@ export class MembersService {
     const previous = existing
       ? await this.memberships.findByUser(actor.tenantId, user.id, tx)
       : null;
-    if (previous?.status === 'ACTIVE') {
+    if (previous?.status === MembershipStatus.ACTIVE) {
       throw new DomainError(
         HttpStatus.CONFLICT,
         ErrorCode.AlreadyMember,
@@ -331,7 +342,7 @@ export class MembersService {
           {
             role: dto.role,
             staffId,
-            status: 'ACTIVE',
+            status: MembershipStatus.ACTIVE,
             createdBy: actor.userId,
           },
           tx,
@@ -352,11 +363,11 @@ export class MembersService {
 
     const member = toMemberView(row);
     // An existing user who never finished setup still needs a link.
-    if (user.status === 'PENDING_SETUP') {
+    if (user.status === UserStatus.PENDING_SETUP) {
       const link = await this.accountSetup.createSetupLink(user.id, tx);
-      return { member, email: { kind: 'welcome', link } };
+      return { member, email: { kind: InviteEmailKind.WELCOME, link } };
     }
-    return { member, email: { kind: 'added', at: new Date() } };
+    return { member, email: { kind: InviteEmailKind.ADDED, at: new Date() } };
   }
 
   /** Reactivates the member's calendar, or creates one. Returns its id. */
@@ -381,7 +392,7 @@ export class MembersService {
     tx: Tx,
   ): Promise<MemberRow> {
     const row = await this.memberships.findById(tenantId, id, tx);
-    if (!row || row.status !== 'ACTIVE') {
+    if (!row || row.status !== MembershipStatus.ACTIVE) {
       throw new NotFoundException('Member not found');
     }
     return row;
@@ -392,7 +403,8 @@ export class MembersService {
    * otherwise the role table decides.
    */
   private assertCanActOn(actor: TenantActor, target: MemberRow) {
-    if (target.role === 'OWNER' && actor.role === 'OWNER') return;
+    if (target.role === MemberRole.OWNER && actor.role === MemberRole.OWNER)
+      return;
     assertCanManageRole(actor.role, target.role);
   }
 
@@ -410,7 +422,7 @@ export class MembersService {
       roleLabel: ROLE_LABELS[member.role],
       addedBy,
     };
-    if (email.kind === 'welcome') {
+    if (email.kind === InviteEmailKind.WELCOME) {
       await this.emails.enqueue(
         'member-welcome',
         member.email,

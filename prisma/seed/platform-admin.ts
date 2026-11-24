@@ -1,6 +1,9 @@
 import type { PasswordHasher } from '@nestjs/authentication';
 import { z } from 'zod';
-import type { PrismaClient } from '../../src/generated/prisma/client.js';
+import {
+  type PrismaClient,
+  UserStatus,
+} from '../../src/generated/prisma/client.js';
 import { passwordSchema } from '../../src/shared/security/password-policy.js';
 
 export interface PlatformAdminInput {
@@ -73,7 +76,7 @@ export async function seedPlatformAdmin(
         name,
         passwordHash: await hasher.hash(password),
         isPlatformAdmin: true,
-        status: 'ACTIVE',
+        status: UserStatus.ACTIVE,
         emailVerifiedAt: new Date(),
       },
     });
@@ -89,7 +92,7 @@ export async function seedPlatformAdmin(
       // A disabled admin stays disabled unless the password is (re)set on purpose.
       ...(setPassword && {
         passwordHash: await hasher.hash(password),
-        status: 'ACTIVE',
+        status: UserStatus.ACTIVE,
       }),
     },
   });

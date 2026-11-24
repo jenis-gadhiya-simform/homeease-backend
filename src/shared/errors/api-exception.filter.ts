@@ -1,6 +1,7 @@
 import {
   type ArgumentsHost,
   Catch,
+  type ContextType,
   type ExceptionFilter,
   HttpException,
   HttpStatus,
@@ -17,6 +18,8 @@ import {
   PrismaErrorCode,
 } from '../database/prisma-errors.js';
 import { DomainError, ErrorCode } from './domain-error.js';
+
+const HTTP_CONTEXT: ContextType = 'http';
 
 /** The body of every error response. */
 export interface ErrorEnvelope {
@@ -142,7 +145,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('ExceptionFilter');
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    if (host.getType() !== 'http') throw exception;
+    if (host.getType() !== HTTP_CONTEXT) throw exception;
 
     const http = host.switchToHttp();
     const req = http.getRequest<Request>();

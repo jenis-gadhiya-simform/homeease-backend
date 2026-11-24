@@ -5,6 +5,7 @@ import { AuthRateLimiter } from './auth-rate-limiter.js';
 import type { CustomerPrincipal, StaffPrincipal } from './auth.types.js';
 import { CustomerAccountsRepository } from './repositories/customer-accounts.repository.js';
 import { UsersRepository } from './repositories/users.repository.js';
+import { UserStatus } from '../../generated/prisma/client.js';
 
 export const invalidCredentials = () =>
   new DomainError(
@@ -33,7 +34,7 @@ export class SignInService {
     await this.limiter.hit('staff-login', email);
     const found = await this.users.findCredentials(email);
     const valid = await this.hasher.verify(password, found?.passwordHash);
-    if (!valid || !found?.passwordHash || found.status !== 'ACTIVE') {
+    if (!valid || !found?.passwordHash || found.status !== UserStatus.ACTIVE) {
       throw invalidCredentials();
     }
     if (this.hasher.needsRehash(found.passwordHash)) {

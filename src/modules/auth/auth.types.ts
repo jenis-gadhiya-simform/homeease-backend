@@ -1,6 +1,8 @@
+import { AccountKind } from '../../shared/context/request-context.js';
+
 /** A staff-side user (platform admin, Owner, Manager, Receptionist, Staff). */
 export interface StaffPrincipal {
-  kind: 'staff';
+  kind: typeof AccountKind.STAFF;
   id: string;
   email: string;
   name: string;
@@ -9,7 +11,7 @@ export interface StaffPrincipal {
 
 /** A customer account (self-service). */
 export interface CustomerPrincipal {
-  kind: 'customer';
+  kind: typeof AccountKind.CUSTOMER;
   id: string;
   email: string;
   hasPassword: boolean;
@@ -18,7 +20,16 @@ export interface CustomerPrincipal {
 
 /** Who the access token belongs to, loaded from the database on every request. */
 export type Principal = StaffPrincipal | CustomerPrincipal;
-export type PrincipalKind = Principal['kind'];
+export type PrincipalKind = AccountKind;
+
+/** How the user signed in (the token's `amr` claim). */
+export const SignInMethod = {
+  /** Password. */
+  PASSWORD: 'pwd',
+  /** An emailed link (magic link). */
+  EMAIL_LINK: 'email',
+} as const;
+export type SignInMethod = (typeof SignInMethod)[keyof typeof SignInMethod];
 
 /**
  * Custom claims in our access tokens. Facts that can change (roles,
@@ -30,7 +41,7 @@ export interface AccessTokenClaims {
   /** Platform admin (informational; authorization reads `User.isPlatformAdmin`). */
   pa: boolean;
   /** How the user signed in: `pwd` (password) or `email` (an emailed link). */
-  amr: ('pwd' | 'email')[];
+  amr: SignInMethod[];
   /** Sign-in time, seconds since epoch; kept across refreshes. */
   auth_time: number;
 }

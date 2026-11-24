@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import type { Prisma } from '../../../generated/prisma/client.js';
+import {
+  MembershipStatus,
+  type Prisma,
+  UserStatus,
+} from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../shared/database/prisma.service.js';
 import { TenantPrismaService } from '../../../shared/database/tenant-prisma.service.js';
 import type { StaffPrincipal } from '../auth.types.js';
+import { AccountKind } from '../../../shared/context/request-context.js';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -19,7 +24,7 @@ function toPrincipal(row: {
   name: string;
   isPlatformAdmin: boolean;
 }): StaffPrincipal {
-  return { kind: 'staff', ...row };
+  return { kind: AccountKind.STAFF, ...row };
 }
 
 /** Staff-side `User` rows. The password hash leaves this class only for verification. */
@@ -44,7 +49,7 @@ export class UsersRepository {
   /** The signed-in user, or null when it no longer exists or isn't ACTIVE. */
   async findActivePrincipal(id: string): Promise<StaffPrincipal | null> {
     const row = await this.prisma.user.findFirst({
-      where: { id, status: 'ACTIVE' },
+      where: { id, status: UserStatus.ACTIVE },
       select: principalSelect,
     });
     return row && toPrincipal(row);
@@ -52,7 +57,7 @@ export class UsersRepository {
 
   async findActiveByEmail(email: string) {
     return this.prisma.user.findFirst({
-      where: { email, status: 'ACTIVE' },
+      where: { email, status: UserStatus.ACTIVE },
       select: { id: true, name: true, email: true },
     });
   }
@@ -73,7 +78,7 @@ export class UsersRepository {
   ): Promise<StaffPrincipal> {
     const row = await db.user.update({
       where: { id },
-      data: { passwordHash, status: 'ACTIVE', emailVerifiedAt: now },
+      data: { passwordHash, status: UserStatus.ACTIVE, emailVerifiedAt: now },
       select: principalSelect,
     });
     return toPrincipal(row);
@@ -111,16 +116,16 @@ export class UsersRepository {
     db: Db = this.prisma,
   ) {
     return db.user.create({
-      data: { email: data.email, name: data.name, status: 'PENDING_SETUP' },
+      data: {
+        email: data.email,
+        name: data.name,
+        status: UserStatus.PENDING_SETUP,
+      },
       select: { id: true, email: true, name: true, status: true },
     });
   }
 
-  async setStatus(
-    id: string,
-    status: 'PENDING_SETUP' | 'ACTIVE' | 'DISABLED',
-    db: Db = this.prisma,
-  ) {
+  async setStatus(id: string, status: UserStatus, db: Db = this.prisma) {
     await db.user.update({
       where: { id },
       data: { status },
@@ -132,7 +137,7 @@ export class UsersRepository {
   async findMemberships(userId: string) {
     const rows = await this.tenantPrisma.runAsUser(userId, (tx) =>
       tx.membership.findMany({
-        where: { userId, status: 'ACTIVE' },
+        where: { userId, status: MembershipStatus.ACTIVE },
         orderBy: { createdAt: 'asc' },
         select: {
           role: true,
@@ -157,7 +162,7 @@ export class UsersRepository {
   async findLatestBusinessName(userId: string): Promise<string | null> {
     const membership = await this.tenantPrisma.runAsUser(userId, (tx) =>
       tx.membership.findFirst({
-        where: { userId, status: 'ACTIVE' },
+        where: { userId, status: MembershipStatus.ACTIVE },
         orderBy: { createdAt: 'desc' },
         select: { tenant: { select: { name: true } } },
       }),

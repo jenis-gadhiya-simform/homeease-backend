@@ -3,7 +3,12 @@ import { TokenService } from '@nestjs/authentication';
 import type { Request, Response } from 'express';
 import { env, isProduction } from '../../config/env.js';
 import { REFRESH_COOKIE, REFRESH_COOKIE_PATH } from './auth.constants.js';
-import type { AccessTokenClaims, Principal } from './auth.types.js';
+import {
+  type AccessTokenClaims,
+  type Principal,
+  SignInMethod,
+} from './auth.types.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 /** What sign-in endpoints answer; the refresh token goes in a cookie instead. */
 export interface AccessTokenResponse {
@@ -52,18 +57,18 @@ export class AuthTokensService {
   /** Starts a refresh-token family for a sign-in and sets the cookie. */
   async signIn(
     principal: Principal,
-    method: 'pwd' | 'email',
+    method: SignInMethod,
     res: Response,
   ): Promise<AccessTokenResponse> {
     const claims: AccessTokenClaims = {
       kind: principal.kind,
-      pa: principal.kind === 'staff' && principal.isPlatformAdmin,
+      pa: principal.kind === AccountKind.STAFF && principal.isPlatformAdmin,
       amr: [method],
       auth_time: Math.floor(Date.now() / 1000),
     };
     const pair = await this.tokens.issue(principal.id, {
       claims: { ...claims },
-      method: method === 'pwd' ? 'password' : 'email-link',
+      method: method === SignInMethod.PASSWORD ? 'password' : 'email-link',
     });
     this.setRefreshCookie(res, pair.refreshToken);
     return this.toResponse(pair);

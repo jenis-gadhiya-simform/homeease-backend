@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+export const NodeEnv = {
+  DEVELOPMENT: 'development',
+  PRODUCTION: 'production',
+  TEST: 'test',
+} as const;
+export type NodeEnv = (typeof NodeEnv)[keyof typeof NodeEnv];
+
 const port = z.coerce.number().int().min(1).max(65_535);
 const positiveInt = z.coerce.number().int().positive();
 const nonNegativeInt = z.coerce.number().int().nonnegative();
@@ -20,9 +27,7 @@ const urlWithProtocol = (...protocols: string[]) =>
  * Documented in docs/architecture.md (Configuration) and .env.example.
  */
 export const envSchema = z.object({
-  NODE_ENV: z
-    .enum(['development', 'production', 'test'])
-    .default('development'),
+  NODE_ENV: z.enum(NodeEnv).default(NodeEnv.DEVELOPMENT),
   PORT: port.default(3000),
 
   // Logging (pino)
@@ -107,14 +112,14 @@ const DEV_JWT_SECRET = 'dev-only-insecure-jwt-secret-do-not-use-in-production';
 /** Cross-field rules and environment-dependent defaults. */
 const appEnvSchema = envSchema
   .superRefine((value, ctx) => {
-    if (value.NODE_ENV === 'production' && !value.DATABASE_URL) {
+    if (value.NODE_ENV === NodeEnv.PRODUCTION && !value.DATABASE_URL) {
       ctx.addIssue({
         code: 'custom',
         path: ['DATABASE_URL'],
         message: 'Required in production',
       });
     }
-    if (value.NODE_ENV === 'production' && !value.JWT_SECRET) {
+    if (value.NODE_ENV === NodeEnv.PRODUCTION && !value.JWT_SECRET) {
       ctx.addIssue({
         code: 'custom',
         path: ['JWT_SECRET'],
@@ -155,4 +160,4 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
  */
 export const env: Env = parseEnv(process.env);
 
-export const isProduction = env.NODE_ENV === 'production';
+export const isProduction = env.NODE_ENV === NodeEnv.PRODUCTION;

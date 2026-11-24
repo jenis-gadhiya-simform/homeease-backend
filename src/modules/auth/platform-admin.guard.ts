@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import type { Principal } from './auth.types.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 /**
  * Platform-admin routes (`/admin/*`). Reads `User.isPlatformAdmin` as loaded
@@ -18,7 +19,7 @@ import type { Principal } from './auth.types.js';
 export class PlatformAdminGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const user = context.switchToHttp().getRequest<{ user?: Principal }>().user;
-    if (user?.kind !== 'staff' || !user.isPlatformAdmin) {
+    if (user?.kind !== AccountKind.STAFF || !user.isPlatformAdmin) {
       throw new DomainError(
         HttpStatus.FORBIDDEN,
         ErrorCode.Forbidden,

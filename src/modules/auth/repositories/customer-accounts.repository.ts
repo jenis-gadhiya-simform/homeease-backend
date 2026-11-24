@@ -6,6 +6,7 @@ import {
 } from '../../../shared/database/prisma-errors.js';
 import { PrismaService } from '../../../shared/database/prisma.service.js';
 import type { CustomerPrincipal } from '../auth.types.js';
+import { AccountKind } from '../../../shared/context/request-context.js';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -23,7 +24,7 @@ function toPrincipal(row: {
   emailVerifiedAt: Date | null;
 }): CustomerPrincipal {
   return {
-    kind: 'customer',
+    kind: AccountKind.CUSTOMER,
     id: row.id,
     email: row.email,
     hasPassword: row.passwordHash !== null,

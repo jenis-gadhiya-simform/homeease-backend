@@ -10,6 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import type { Principal, PrincipalKind } from './auth.types.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 const ACCOUNT_KIND = 'auth:account-kind';
 
@@ -32,7 +33,7 @@ export class AccountKindGuard implements CanActivate {
       throw new DomainError(
         HttpStatus.FORBIDDEN,
         ErrorCode.WrongAccountType,
-        kind === 'staff'
+        kind === AccountKind.STAFF
           ? 'This endpoint is for staff accounts'
           : 'This endpoint is for customer accounts',
       );
@@ -44,13 +45,13 @@ export class AccountKindGuard implements CanActivate {
 /** Only staff-side users (platform admin included) may call this route. */
 export const StaffOnly = () =>
   applyDecorators(
-    SetMetadata(ACCOUNT_KIND, 'staff'),
+    SetMetadata(ACCOUNT_KIND, AccountKind.STAFF),
     UseGuards(AccountKindGuard),
   );
 
 /** Only customer accounts may call this route. */
 export const CustomerOnly = () =>
   applyDecorators(
-    SetMetadata(ACCOUNT_KIND, 'customer'),
+    SetMetadata(ACCOUNT_KIND, AccountKind.CUSTOMER),
     UseGuards(AccountKindGuard),
   );

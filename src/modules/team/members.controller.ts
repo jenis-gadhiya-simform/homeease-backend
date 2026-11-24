@@ -35,6 +35,7 @@ import {
   type UpdateMemberDto,
   updateMemberSchema,
 } from './team.schemas.js';
+import { MemberRole } from '../../generated/prisma/client.js';
 
 const memberExample = {
   id: '0193…',
@@ -58,7 +59,7 @@ const memberExample = {
 @ApiForbiddenResponse({
   description: 'NOT_A_MEMBER, TENANT_SUSPENDED or FORBIDDEN (role)',
 })
-@TenantScoped('OWNER', 'MANAGER')
+@TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)
 @Controller('members')
 export class MembersController {
   constructor(private readonly members: MembersService) {}

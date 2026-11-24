@@ -4,7 +4,11 @@ import {
   JwtBearerProvider,
   type JwtClaims,
 } from '@nestjs/authentication';
-import { RequestContext } from '../../shared/context/request-context.js';
+import {
+  AccountKind,
+  PLATFORM_ADMIN_ROLE,
+  RequestContext,
+} from '../../shared/context/request-context.js';
 import type { Principal } from './auth.types.js';
 import { CustomerAccountsRepository } from './repositories/customer-accounts.repository.js';
 import { UsersRepository } from './repositories/users.repository.js';
@@ -29,9 +33,9 @@ export class JwtAuth extends JwtBearerProvider<Principal> {
   protected async validate(claims: JwtClaims): Promise<Principal | null> {
     if (!claims.sub) return null;
     const principal =
-      claims.kind === 'staff'
+      claims.kind === AccountKind.STAFF
         ? await this.users.findActivePrincipal(claims.sub)
-        : claims.kind === 'customer'
+        : claims.kind === AccountKind.CUSTOMER
           ? await this.customers.findPrincipal(claims.sub)
           : null;
     if (principal && RequestContext.current()) {
@@ -40,8 +44,8 @@ export class JwtAuth extends JwtBearerProvider<Principal> {
         userId: principal.id,
         // Tenant roles are resolved per request by the tenant guard (F01).
         role:
-          principal.kind === 'staff' && principal.isPlatformAdmin
-            ? 'PLATFORM_ADMIN'
+          principal.kind === AccountKind.STAFF && principal.isPlatformAdmin
+            ? PLATFORM_ADMIN_ROLE
             : null,
         tenantId: null,
       });

@@ -14,9 +14,10 @@ import {
   LINK_PATHS,
   MAGIC_LINK_TTL_MS,
 } from './auth.constants.js';
-import type { CustomerPrincipal } from './auth.types.js';
+import { type CustomerPrincipal, SignInMethod } from './auth.types.js';
 import { CustomerAccountsRepository } from './repositories/customer-accounts.repository.js';
 import { MagicLinkTokensRepository } from './repositories/magic-link-tokens.repository.js';
+import { MagicLinkPurpose } from '../../generated/prisma/client.js';
 
 /** Customer self-service: magic-link sign-in and setting a password. */
 @Injectable()
@@ -42,7 +43,7 @@ export class CustomerAuthService {
     await this.links.replace(
       {
         accountId,
-        purpose: 'LOGIN',
+        purpose: MagicLinkPurpose.LOGIN,
         tokenHash,
         expiresAt: new Date(now.getTime() + MAGIC_LINK_TTL_MS),
       },
@@ -64,7 +65,7 @@ export class CustomerAuthService {
     const now = new Date();
     const open = await this.links.findOpen(
       hashOneTimeToken(token),
-      'LOGIN',
+      MagicLinkPurpose.LOGIN,
       now,
     );
     if (!open || !(await this.links.consume(open.id, now))) throw linkExpired();
@@ -114,7 +115,7 @@ export function isFreshEmailSignIn(
   const amr = Array.isArray(claims?.amr) ? claims.amr : [];
   const authTime = claims?.auth_time;
   return (
-    amr.includes('email') &&
+    amr.includes(SignInMethod.EMAIL_LINK) &&
     typeof authTime === 'number' &&
     nowMs - authTime * 1000 <= FRESH_SIGN_IN_MS
   );

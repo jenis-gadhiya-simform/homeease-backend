@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import type {
+import {
   MemberRole,
   MembershipStatus,
-  Prisma,
+  type Prisma,
   UserStatus,
 } from '../../../generated/prisma/client.js';
 
@@ -29,8 +29,17 @@ export type MemberRow = Prisma.MembershipGetPayload<{
   select: typeof memberSelect;
 }>;
 
-/** `PENDING_SETUP` / `ACTIVE` are the user's setup status; `REMOVED` the membership's. */
-export type MemberListStatus = 'ACTIVE' | 'PENDING_SETUP' | 'REMOVED';
+/**
+ * Status filter of the member list (F04): `ACTIVE` / `PENDING_SETUP` are the
+ * user's setup status, `REMOVED` the membership's.
+ */
+export const MemberListStatus = {
+  ACTIVE: UserStatus.ACTIVE,
+  PENDING_SETUP: UserStatus.PENDING_SETUP,
+  REMOVED: MembershipStatus.REMOVED,
+} as const;
+export type MemberListStatus =
+  (typeof MemberListStatus)[keyof typeof MemberListStatus];
 
 /**
  * `membership` rows (a tenant table: RLS applies). Every method that reads
@@ -59,7 +68,11 @@ export class MembershipsRepository {
   /** The active Owner and their user, or null. */
   async findOwner(tenantId: string, tx: Tx) {
     return tx.membership.findFirst({
-      where: { tenantId, role: 'OWNER', status: 'ACTIVE' },
+      where: {
+        tenantId,
+        role: MemberRole.OWNER,
+        status: MembershipStatus.ACTIVE,
+      },
       select: ownerSelect,
     });
   }
@@ -94,11 +107,11 @@ export class MembershipsRepository {
     tx: Tx,
   ): Promise<MemberRow[]> {
     const status: MembershipStatus =
-      filter.status === 'REMOVED' ? 'REMOVED' : 'ACTIVE';
+      filter.status === MemberListStatus.REMOVED
+        ? MembershipStatus.REMOVED
+        : MembershipStatus.ACTIVE;
     const userStatus: UserStatus | undefined =
-      filter.status === 'ACTIVE' || filter.status === 'PENDING_SETUP'
-        ? filter.status
-        : undefined;
+      filter.status === MemberListStatus.REMOVED ? undefined : filter.status;
     return tx.membership.findMany({
       where: {
         tenantId,
@@ -133,7 +146,7 @@ export class MembershipsRepository {
   async remove(tenantId: string, membershipId: string, tx: Tx) {
     await tx.membership.update({
       where: { id: membershipId, tenantId },
-      data: { status: 'REMOVED' },
+      data: { status: MembershipStatus.REMOVED },
       select: { id: true },
     });
   }
@@ -141,7 +154,11 @@ export class MembershipsRepository {
   /** Active memberships of a user in any other business than `tenantId`. */
   async countOtherActiveForUser(tenantId: string, userId: string, tx: Tx) {
     return tx.membership.count({
-      where: { userId, status: 'ACTIVE', tenantId: { not: tenantId } },
+      where: {
+        userId,
+        status: MembershipStatus.ACTIVE,
+        tenantId: { not: tenantId },
+      },
     });
   }
 
@@ -152,7 +169,7 @@ export class MembershipsRepository {
    */
   async findActiveForUser(userId: string, tx: Tx) {
     return tx.membership.findMany({
-      where: { userId, status: 'ACTIVE' },
+      where: { userId, status: MembershipStatus.ACTIVE },
       select: {
         tenantId: true,
         role: true,

@@ -1,9 +1,21 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client.js';
-import { RequestContext } from '../../shared/context/request-context.js';
+import {
+  AccountKind,
+  PLATFORM_ADMIN_ROLE,
+  RequestContext,
+} from '../../shared/context/request-context.js';
 
+/** Who an audit entry is attributed to (`audit_log.actor_type`). */
+export const AuditActorType = {
+  USER: 'USER',
+  CUSTOMER: 'CUSTOMER',
+  SYSTEM: 'SYSTEM',
+  PLATFORM_ADMIN: 'PLATFORM_ADMIN',
+  WEBHOOK: 'WEBHOOK',
+} as const;
 export type AuditActorType =
-  'USER' | 'CUSTOMER' | 'SYSTEM' | 'PLATFORM_ADMIN' | 'WEBHOOK';
+  (typeof AuditActorType)[keyof typeof AuditActorType];
 
 export interface AuditEntry {
   /** Null for platform-level events. */
@@ -35,12 +47,12 @@ export class AuditService {
     const actorType: AuditActorType =
       entry.actorType ??
       (!actor
-        ? 'SYSTEM'
-        : actor.kind === 'customer'
-          ? 'CUSTOMER'
-          : actor.role === 'PLATFORM_ADMIN'
-            ? 'PLATFORM_ADMIN'
-            : 'USER');
+        ? AuditActorType.SYSTEM
+        : actor.kind === AccountKind.CUSTOMER
+          ? AuditActorType.CUSTOMER
+          : actor.role === PLATFORM_ADMIN_ROLE
+            ? AuditActorType.PLATFORM_ADMIN
+            : AuditActorType.USER);
     await tx.auditLog.create({
       data: {
         tenantId: entry.tenantId,

@@ -11,8 +11,11 @@ import { Reflector } from '@nestjs/core';
 import { ApiHeader } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { z } from 'zod';
-import type { MemberRole } from '../../generated/prisma/client.js';
-import { RequestContext } from '../../shared/context/request-context.js';
+import { MemberRole, TenantStatus } from '../../generated/prisma/client.js';
+import {
+  AccountKind,
+  RequestContext,
+} from '../../shared/context/request-context.js';
 import { TenantPrismaService } from '../../shared/database/tenant-prisma.service.js';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import type { Principal } from '../auth/auth.types.js';
@@ -31,7 +34,7 @@ const tenantIdSchema = z.uuid();
  *   user with exactly one membership uses that one.
  * - No matching membership → 403 `NOT_A_MEMBER`; several and no header →
  *   400 `TENANT_REQUIRED`; a suspended business → 403 `TENANT_SUSPENDED`.
- * - With `@TenantScoped('OWNER', 'MANAGER')`, other roles get 403 (RBAC until
+ * - With `@TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)`, other roles get 403 (RBAC until
  *   F03 brings `@nestjs/authorization`).
  *
  * Memberships are read from the database on every request, so removing one
@@ -50,7 +53,7 @@ export class TenantGuard implements CanActivate {
       .switchToHttp()
       .getRequest<Request & { user?: Principal }>();
     const user = req.user;
-    if (user?.kind !== 'staff') {
+    if (user?.kind !== AccountKind.STAFF) {
       throw new DomainError(
         HttpStatus.FORBIDDEN,
         ErrorCode.WrongAccountType,
@@ -82,7 +85,7 @@ export class TenantGuard implements CanActivate {
         'You are not a member of this business',
       );
     }
-    if (membership.tenant.status === 'SUSPENDED') {
+    if (membership.tenant.status === TenantStatus.SUSPENDED) {
       throw new DomainError(
         HttpStatus.FORBIDDEN,
         ErrorCode.TenantSuspended,
@@ -103,7 +106,7 @@ export class TenantGuard implements CanActivate {
     }
 
     RequestContext.setActor({
-      kind: 'staff',
+      kind: AccountKind.STAFF,
       userId: user.id,
       role: membership.role,
       tenantId: membership.tenantId,
@@ -128,7 +131,7 @@ export class TenantGuard implements CanActivate {
 
 /**
  * The route acts inside one business (resolved by `TenantGuard`). Pass roles
- * to restrict it: `@TenantScoped('OWNER', 'MANAGER')`.
+ * to restrict it: `@TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)`.
  */
 export const TenantScoped = (...roles: MemberRole[]) =>
   applyDecorators(

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { emailSchema } from '../auth/auth.schemas.js';
+import { TenantStatus } from '../../generated/prisma/client.js';
 
 /** Slugs that would clash with app routes or look official. */
 export const RESERVED_SLUGS = new Set([
@@ -68,7 +69,7 @@ export type UpdateTenantDto = z.infer<typeof updateTenantSchema>;
 export const tenantIdParamSchema = z.uuid();
 
 export const listTenantsQuerySchema = z.object({
-  status: z.enum(['ACTIVE', 'SUSPENDED']).optional(),
+  status: z.enum(TenantStatus).optional(),
   /** The `nextCursor` of the previous page. */
   cursor: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),

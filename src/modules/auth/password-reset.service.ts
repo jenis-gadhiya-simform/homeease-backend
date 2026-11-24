@@ -20,6 +20,12 @@ import { AccountSetupTokensRepository } from './repositories/account-setup-token
 import { CustomerAccountsRepository } from './repositories/customer-accounts.repository.js';
 import { MagicLinkTokensRepository } from './repositories/magic-link-tokens.repository.js';
 import { UsersRepository } from './repositories/users.repository.js';
+import {
+  AccountTokenPurpose,
+  MagicLinkPurpose,
+  UserStatus,
+} from '../../generated/prisma/client.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 /**
  * Forgotten passwords. Staff: an `AccountSetupToken` with purpose RESET;
@@ -51,13 +57,13 @@ export class PasswordResetService {
     const { token, tokenHash } = generateOneTimeToken();
     const jobId = `password-reset-${tokenHash.slice(0, 32)}`;
 
-    if (kind === 'staff') {
+    if (kind === AccountKind.STAFF) {
       const user = await this.users.findActiveByEmail(email);
       if (!user) return;
       await this.staffTokens.replace(
         {
           userId: user.id,
-          purpose: 'RESET',
+          purpose: AccountTokenPurpose.RESET,
           tokenHash,
           expiresAt: new Date(now.getTime() + STAFF_RESET_TOKEN_TTL_MS),
         },
@@ -81,7 +87,7 @@ export class PasswordResetService {
     await this.customerTokens.replace(
       {
         accountId,
-        purpose: 'RESET',
+        purpose: MagicLinkPurpose.RESET,
         tokenHash,
         expiresAt: new Date(now.getTime() + CUSTOMER_RESET_TOKEN_TTL_MS),
       },
@@ -106,7 +112,7 @@ export class PasswordResetService {
   ): Promise<void> {
     const tokenHash = hashOneTimeToken(token);
     const accountId =
-      kind === 'staff'
+      kind === AccountKind.STAFF
         ? await this.resetStaff(tokenHash, password)
         : await this.resetCustomer(tokenHash, password);
     await this.authTokens.signOutEverywhere(accountId);
@@ -115,18 +121,23 @@ export class PasswordResetService {
   private async resetStaff(tokenHash: string, password: string) {
     const open = await this.staffTokens.findOpen(
       tokenHash,
-      'RESET',
+      AccountTokenPurpose.RESET,
       new Date(),
     );
     const user = open && (await this.users.findProfile(open.userId));
-    if (!open || user?.status !== 'ACTIVE') throw linkExpired();
+    if (!open || user?.status !== UserStatus.ACTIVE) throw linkExpired();
     const passwordHash = await this.hasher.hash(password);
     await this.prisma.$transaction(async (tx) => {
       const now = new Date();
       if (!(await this.staffTokens.consume(open.id, now, tx))) {
         throw linkExpired();
       }
-      await this.staffTokens.revokeOpen(open.userId, 'RESET', now, tx);
+      await this.staffTokens.revokeOpen(
+        open.userId,
+        AccountTokenPurpose.RESET,
+        now,
+        tx,
+      );
       await this.users.updatePasswordHash(open.userId, passwordHash, tx);
     });
     return open.userId;
@@ -135,7 +146,7 @@ export class PasswordResetService {
   private async resetCustomer(tokenHash: string, password: string) {
     const open = await this.customerTokens.findOpen(
       tokenHash,
-      'RESET',
+      MagicLinkPurpose.RESET,
       new Date(),
     );
     if (!open) throw linkExpired();

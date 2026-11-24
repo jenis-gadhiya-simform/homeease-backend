@@ -8,6 +8,7 @@ import {
 import { TenantScoped } from './tenant.guard.js';
 import { TenantsService } from './tenants.service.js';
 import { type UpdateTenantDto, updateTenantSchema } from './tenancy.schemas.js';
+import { MemberRole } from '../../generated/prisma/client.js';
 
 /** The business the signed-in staff user is acting in. */
 @ApiTags('Tenants')
@@ -27,7 +28,7 @@ export class TenantsController {
   }
 
   @Patch()
-  @TenantScoped('OWNER', 'MANAGER')
+  @TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)
   @ApiOperation({
     summary: 'Update name, phone, city, address (Owner, Manager)',
     description:

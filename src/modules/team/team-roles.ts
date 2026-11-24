@@ -1,6 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
-import type { MemberRole } from '../../generated/prisma/client.js';
-import { RequestContext } from '../../shared/context/request-context.js';
+import { MemberRole } from '../../generated/prisma/client.js';
+import {
+  AccountKind,
+  RequestContext,
+} from '../../shared/context/request-context.js';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 
 /**
@@ -9,17 +12,21 @@ import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
  * a `@nestjs/authorization` policy.
  */
 const MANAGEABLE: Record<MemberRole, readonly MemberRole[]> = {
-  OWNER: ['MANAGER', 'RECEPTIONIST', 'STAFF'],
-  MANAGER: ['RECEPTIONIST', 'STAFF'],
-  RECEPTIONIST: [],
-  STAFF: [],
+  [MemberRole.OWNER]: [
+    MemberRole.MANAGER,
+    MemberRole.RECEPTIONIST,
+    MemberRole.STAFF,
+  ],
+  [MemberRole.MANAGER]: [MemberRole.RECEPTIONIST, MemberRole.STAFF],
+  [MemberRole.RECEPTIONIST]: [],
+  [MemberRole.STAFF]: [],
 };
 
 export const ROLE_LABELS: Record<MemberRole, string> = {
-  OWNER: 'Owner',
-  MANAGER: 'Manager',
-  RECEPTIONIST: 'Receptionist',
-  STAFF: 'Staff',
+  [MemberRole.OWNER]: 'Owner',
+  [MemberRole.MANAGER]: 'Manager',
+  [MemberRole.RECEPTIONIST]: 'Receptionist',
+  [MemberRole.STAFF]: 'Staff',
 };
 
 export function canManageRole(actor: MemberRole, target: MemberRole): boolean {
@@ -53,7 +60,7 @@ export interface TenantActor {
 
 export function tenantActor(): TenantActor {
   const actor = RequestContext.actor();
-  if (actor?.kind !== 'staff' || !actor.tenantId || !actor.role) {
+  if (actor?.kind !== AccountKind.STAFF || !actor.tenantId || !actor.role) {
     throw new Error('No tenant actor in RequestContext: is TenantGuard on?');
   }
   return {

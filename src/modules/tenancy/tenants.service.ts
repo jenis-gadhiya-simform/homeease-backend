@@ -8,6 +8,7 @@ import {
   TenantsRepository,
 } from './repositories/tenants.repository.js';
 import type { UpdateTenantDto } from './tenancy.schemas.js';
+import { TenantStatus } from '../../generated/prisma/client.js';
 
 /** The business profile, for its members and the public booking page. */
 @Injectable()
@@ -58,7 +59,7 @@ export class TenantsService {
    */
   async publicProfile(slug: string) {
     const tenant = await this.tenants.findBySlug(slug);
-    if (!tenant || tenant.status !== 'ACTIVE') {
+    if (!tenant || tenant.status !== TenantStatus.ACTIVE) {
       throw new NotFoundException('Business not found');
     }
     const staff = await this.tenantPrisma.run(tenant.id, (tx) =>

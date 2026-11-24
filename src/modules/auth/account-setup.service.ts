@@ -1,6 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { PasswordHasher } from '@nestjs/authentication';
-import type { Prisma } from '../../generated/prisma/client.js';
+import {
+  AccountTokenPurpose,
+  type Prisma,
+  UserStatus,
+} from '../../generated/prisma/client.js';
 import { PrismaService } from '../../shared/database/prisma.service.js';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import {
@@ -12,6 +16,16 @@ import { LINK_PATHS, SETUP_TOKEN_TTL_MS } from './auth.constants.js';
 import type { StaffPrincipal } from './auth.types.js';
 import { AccountSetupTokensRepository } from './repositories/account-setup-tokens.repository.js';
 import { UsersRepository } from './repositories/users.repository.js';
+
+/**
+ * Which email a flow that adds a staff user sends after commit (F01, F04):
+ * a set-password link for a new or still-pending user, or "you've been
+ * added" for one who already has a password.
+ */
+export const InviteEmailKind = {
+  WELCOME: 'welcome',
+  ADDED: 'added',
+} as const;
 
 /** A freshly created set-password link. The raw token exists only here and in the email. */
 export interface SetupLink {
@@ -54,7 +68,7 @@ export class AccountSetupService {
     const { token, tokenHash } = generateOneTimeToken();
     const expiresAt = new Date(now.getTime() + SETUP_TOKEN_TTL_MS);
     await this.tokens.replace(
-      { userId, purpose: 'SETUP', tokenHash, expiresAt },
+      { userId, purpose: AccountTokenPurpose.SETUP, tokenHash, expiresAt },
       now,
       tx,
     );
@@ -81,7 +95,7 @@ export class AccountSetupService {
     return this.prisma.$transaction(async (tx) => {
       const now = new Date();
       if (!(await this.tokens.consume(tokenId, now, tx))) throw linkExpired();
-      await this.tokens.revokeOpen(user.id, 'SETUP', now, tx);
+      await this.tokens.revokeOpen(user.id, AccountTokenPurpose.SETUP, now, tx);
       return this.users.activate(user.id, passwordHash, now, tx);
     });
   }
@@ -89,12 +103,13 @@ export class AccountSetupService {
   private async findPendingUser(token: string) {
     const open = await this.tokens.findOpen(
       hashOneTimeToken(token),
-      'SETUP',
+      AccountTokenPurpose.SETUP,
       new Date(),
     );
     const user = open && (await this.users.findProfile(open.userId));
     // A disabled (or already active) user can't be set up through an old link.
-    if (!open || !user || user.status !== 'PENDING_SETUP') throw linkExpired();
+    if (!open || !user || user.status !== UserStatus.PENDING_SETUP)
+      throw linkExpired();
     return {
       tokenId: open.id,
       id: user.id,

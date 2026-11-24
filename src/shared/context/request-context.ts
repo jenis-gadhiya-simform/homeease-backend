@@ -2,10 +2,20 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
+/** Which identity table an account lives in: staff-side `User` or `CustomerAccount`. */
+export const AccountKind = {
+  STAFF: 'staff',
+  CUSTOMER: 'customer',
+} as const;
+export type AccountKind = (typeof AccountKind)[keyof typeof AccountKind];
+
+/** `Actor.role` of the platform admin (tenant roles are `MemberRole`). */
+export const PLATFORM_ADMIN_ROLE = 'PLATFORM_ADMIN';
+
 /** Who is making the request. Set by the authentication provider (F02). */
 export interface Actor {
   /** Staff-side `User` or `CustomerAccount`. */
-  kind: 'staff' | 'customer';
+  kind: AccountKind;
   /** `User.id` or `CustomerAccount.id`. */
   userId: string;
   /** Role inside `tenantId`, `PLATFORM_ADMIN`, or `null` until a tenant is resolved (F01). */

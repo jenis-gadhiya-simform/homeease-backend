@@ -1,5 +1,9 @@
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
-import type { Prisma } from '../../generated/prisma/client.js';
+import {
+  MemberRole,
+  MembershipStatus,
+  type Prisma,
+} from '../../generated/prisma/client.js';
 import { TenantPrismaService } from '../../shared/database/tenant-prisma.service.js';
 import { DomainError, ErrorCode } from '../../shared/errors/domain-error.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -57,7 +61,8 @@ export class StaffService {
       const current = await this.staff.findById(actor.tenantId, id, tx);
       if (!current) throw new NotFoundException('Staff not found');
 
-      const manager = actor.role === 'OWNER' || actor.role === 'MANAGER';
+      const manager =
+        actor.role === MemberRole.OWNER || actor.role === MemberRole.MANAGER;
       const own = current.membership?.userId === actor.userId;
       if (!manager && !(own && dto.active === undefined)) {
         throw new DomainError(
@@ -68,7 +73,10 @@ export class StaffService {
             : 'You can only change your own calendar',
         );
       }
-      if (dto.active === true && current.membership?.status !== 'ACTIVE') {
+      if (
+        dto.active === true &&
+        current.membership?.status !== MembershipStatus.ACTIVE
+      ) {
         throw new DomainError(
           HttpStatus.CONFLICT,
           ErrorCode.Conflict,

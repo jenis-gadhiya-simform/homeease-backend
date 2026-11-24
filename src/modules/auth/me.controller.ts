@@ -26,9 +26,14 @@ import {
   type ChangeCustomerPasswordDto,
   changeCustomerPasswordSchema,
 } from './auth.schemas.js';
-import type { CustomerPrincipal, Principal } from './auth.types.js';
+import {
+  type CustomerPrincipal,
+  type Principal,
+  SignInMethod,
+} from './auth.types.js';
 import { CustomerAuthService } from './customer-auth.service.js';
 import { UsersRepository } from './repositories/users.repository.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 /** The signed-in account (staff or customer). */
 @ApiTags('Me')
@@ -69,7 +74,7 @@ export class MeController {
     },
   })
   async me(@CurrentUser() user: Principal) {
-    if (user.kind !== 'staff') return user;
+    if (user.kind !== AccountKind.STAFF) return user;
     return { ...user, memberships: await this.users.findMemberships(user.id) };
   }
 
@@ -98,6 +103,6 @@ export class MeController {
       body.newPassword,
     );
     await this.authTokens.signOutEverywhere(updated.id);
-    return this.authTokens.signIn(updated, 'pwd', res);
+    return this.authTokens.signIn(updated, SignInMethod.PASSWORD, res);
   }
 }

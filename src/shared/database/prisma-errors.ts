@@ -38,8 +38,11 @@ export function isPrismaError(
   );
 }
 
+/** `error.name` of the wrapper Prisma's driver adapters throw. */
+const DRIVER_ADAPTER_ERROR = 'DriverAdapterError';
+
 interface DriverAdapterErrorLike {
-  name: 'DriverAdapterError';
+  name: typeof DRIVER_ADAPTER_ERROR;
   cause: { originalCode?: string };
 }
 
@@ -47,7 +50,7 @@ function isDriverAdapterError(value: unknown): value is DriverAdapterErrorLike {
   return (
     typeof value === 'object' &&
     value !== null &&
-    (value as { name?: unknown }).name === 'DriverAdapterError' &&
+    (value as { name?: unknown }).name === DRIVER_ADAPTER_ERROR &&
     typeof (value as { cause?: unknown }).cause === 'object'
   );
 }

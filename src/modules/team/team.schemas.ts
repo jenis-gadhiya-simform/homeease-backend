@@ -1,16 +1,13 @@
 import { z } from 'zod';
 import { emailSchema } from '../auth/auth.schemas.js';
+import { MemberRole } from '../../generated/prisma/client.js';
+import { MemberListStatus } from '../tenancy/repositories/memberships.repository.js';
 
 /**
  * Every role is accepted here so that asking for OWNER gets a clear 422
  * OWNERSHIP_TRANSFER_REQUIRED from the service, not a generic 400.
  */
-export const memberRoleSchema = z.enum([
-  'OWNER',
-  'MANAGER',
-  'RECEPTIONIST',
-  'STAFF',
-]);
+export const memberRoleSchema = z.enum(MemberRole);
 
 const displayNameSchema = z.string().trim().min(1).max(100);
 
@@ -35,7 +32,7 @@ export type UpdateMemberDto = z.infer<typeof updateMemberSchema>;
 export const listMembersQuerySchema = z.object({
   role: memberRoleSchema.optional(),
   /** Without it, every member who hasn't been removed. */
-  status: z.enum(['ACTIVE', 'PENDING_SETUP', 'REMOVED']).optional(),
+  status: z.enum(MemberListStatus).optional(),
 });
 export type ListMembersQuery = z.infer<typeof listMembersQuerySchema>;
 

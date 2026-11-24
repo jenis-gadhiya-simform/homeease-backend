@@ -43,6 +43,7 @@ import {
 import { CustomerAuthService } from './customer-auth.service.js';
 import { PasswordResetService } from './password-reset.service.js';
 import { SignInService } from './sign-in.service.js';
+import { SignInMethod } from './auth.types.js';
 
 /** Per client IP; the per-email limit is `AuthRateLimiter`. */
 const AuthThrottle = () =>
@@ -82,7 +83,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const user = await this.signIn.verifyStaff(body.email, body.password);
-    return this.authTokens.signIn(user, 'pwd', res);
+    return this.authTokens.signIn(user, SignInMethod.PASSWORD, res);
   }
 
   @Get('account-setup/:token')
@@ -114,7 +115,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const user = await this.accountSetup.complete(body.token, body.password);
-    return this.authTokens.signIn(user, 'pwd', res);
+    return this.authTokens.signIn(user, SignInMethod.PASSWORD, res);
   }
 
   @Post('customer/login')
@@ -128,7 +129,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const account = await this.signIn.verifyCustomer(body.email, body.password);
-    return this.authTokens.signIn(account, 'pwd', res);
+    return this.authTokens.signIn(account, SignInMethod.PASSWORD, res);
   }
 
   @Post('customer/magic-link')
@@ -156,7 +157,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const account = await this.customerAuth.verifyMagicLink(body.token);
-    return this.authTokens.signIn(account, 'email', res);
+    return this.authTokens.signIn(account, SignInMethod.EMAIL_LINK, res);
   }
 
   @Post('refresh')

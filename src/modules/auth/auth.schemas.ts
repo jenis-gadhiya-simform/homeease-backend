@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { passwordSchema } from '../../shared/security/password-policy.js';
+import { AccountKind } from '../../shared/context/request-context.js';
 
 /** Emails are compared and stored lowercased. */
 export const emailSchema = z
@@ -49,7 +50,7 @@ export type MagicLinkRequestDto = z.infer<typeof magicLinkRequestSchema>;
 export const magicLinkVerifySchema = z.object({ token: tokenSchema });
 export type MagicLinkVerifyDto = z.infer<typeof magicLinkVerifySchema>;
 
-export const accountTypeSchema = z.enum(['staff', 'customer']);
+export const accountTypeSchema = z.enum(AccountKind);
 
 export const forgotPasswordSchema = z.object({
   email: emailSchema,
