@@ -19,7 +19,8 @@ import {
   ApiTags,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import { PlatformAdminOnly } from '../auth/platform-admin.guard.js';
+import { Roles } from '../authorization/authorization.decorators.js';
+import { PLATFORM_ADMIN_ROLE } from '../../shared/context/request-context.js';
 import { TenantOnboardingService } from './tenant-onboarding.service.js';
 import {
   type CreateTenantDto,
@@ -46,7 +47,7 @@ const tenantExample = {
 @ApiTags('Admin: Tenants')
 @ApiBearerAuth()
 @ApiForbiddenResponse({ description: 'Not a platform admin' })
-@PlatformAdminOnly()
+@Roles(PLATFORM_ADMIN_ROLE)
 @Controller('admin/tenants')
 export class AdminTenantsController {
   constructor(private readonly onboarding: TenantOnboardingService) {}

@@ -68,6 +68,11 @@ export const ErrorCode = {
   MemberAlreadyActive: 'MEMBER_ALREADY_ACTIVE',
   /** A member with role STAFF always has an active calendar (422). */
   StaffMustBeBookable: 'STAFF_MUST_BE_BOOKABLE',
+  // F03 authorization
+  /** Members can only add, change or remove members of a lower role (rule A8) (403). */
+  RoleRankTooLow: 'ROLE_RANK_TOO_LOW',
+  /** Ownership can only go to another active Manager who has set up their account (422). */
+  TransferTargetInvalid: 'TRANSFER_TARGET_INVALID',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

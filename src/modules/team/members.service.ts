@@ -33,13 +33,13 @@ import type {
   ListMembersQuery,
   UpdateMemberDto,
 } from './team.schemas.js';
+import type { StaffSubject } from '../../shared/context/subject.js';
+import { requireStaffSubject } from '../authorization/current-subject.js';
+import { enforce } from '../authorization/decision.js';
 import {
-  assertCanManageRole,
-  ownershipTransferRequired,
+  MemberPolicy,
   ROLE_LABELS,
-  type TenantActor,
-  tenantActor,
-} from './team-roles.js';
+} from '../authorization/policies/member.policy.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -108,6 +108,7 @@ export class MembersService {
     private readonly audit: AuditService,
     private readonly emails: EmailService,
     private readonly limiter: MemberInviteLimiter,
+    private readonly policy: MemberPolicy,
   ) {}
 
   /**
@@ -115,11 +116,8 @@ export class MembersService {
    * audit. A removed member is re-added on their old membership.
    */
   async add(dto: AddMemberDto, addedBy: string): Promise<MemberView> {
-    const actor = tenantActor();
-    if (dto.role === MemberRole.OWNER) {
-      throw ownershipTransferRequired('An Owner cannot be added');
-    }
-    assertCanManageRole(actor.role, dto.role);
+    const actor = requireStaffSubject();
+    enforce(this.policy.add(actor, dto.role));
     if (dto.role === MemberRole.STAFF && dto.bookable === false) {
       throw staffMustBeBookable();
     }
@@ -148,7 +146,7 @@ export class MembersService {
   }
 
   async list(query: ListMembersQuery): Promise<MemberView[]> {
-    const { tenantId } = tenantActor();
+    const { tenantId } = requireStaffSubject();
     const rows = await this.tenantPrisma.run(tenantId, (tx) =>
       this.memberships.list(tenantId, query, tx),
     );
@@ -160,18 +158,11 @@ export class MembersService {
    * `bookable` off deactivates the calendar; on reactivates or creates it.
    */
   async update(id: string, dto: UpdateMemberDto): Promise<MemberView> {
-    const actor = tenantActor();
+    const actor = requireStaffSubject();
     return this.tenantPrisma.run(actor.tenantId, async (tx) => {
       const target = await this.findActive(actor.tenantId, id, tx);
       const role = dto.role ?? target.role;
-      if (
-        role !== target.role &&
-        (role === MemberRole.OWNER || target.role === MemberRole.OWNER)
-      ) {
-        throw ownershipTransferRequired('The Owner role cannot be changed');
-      }
-      this.assertCanActOn(actor, target);
-      if (role !== target.role) assertCanManageRole(actor.role, role);
+      enforce(this.policy.update(actor, target, role));
 
       const wasBookable = target.staff?.active ?? false;
       const becomesStaff =
@@ -230,13 +221,10 @@ export class MembersService {
    * businesses are untouched.
    */
   async remove(id: string): Promise<void> {
-    const actor = tenantActor();
+    const actor = requireStaffSubject();
     await this.tenantPrisma.run(actor.tenantId, async (tx) => {
       const target = await this.findActive(actor.tenantId, id, tx);
-      if (target.role === MemberRole.OWNER) {
-        throw ownershipTransferRequired('The Owner cannot be removed');
-      }
-      assertCanManageRole(actor.role, target.role);
+      enforce(this.policy.remove(actor, target));
 
       if (target.staffId && target.staff?.active) {
         // F07: refuse with 409 STAFF_HAS_FUTURE_BOOKINGS once bookings exist.
@@ -264,12 +252,12 @@ export class MembersService {
    * the previous link stops working. 409 once they have.
    */
   async resendSetup(id: string, addedBy: string): Promise<MemberView> {
-    const actor = tenantActor();
+    const actor = requireStaffSubject();
     const { member, link } = await this.tenantPrisma.run(
       actor.tenantId,
       async (tx) => {
         const target = await this.findActive(actor.tenantId, id, tx);
-        this.assertCanActOn(actor, target);
+        enforce(this.policy.resendSetup(actor, target));
         if (target.user.status !== UserStatus.PENDING_SETUP) {
           throw new DomainError(
             HttpStatus.CONFLICT,
@@ -293,7 +281,7 @@ export class MembersService {
 
   private async addInTx(
     tx: Tx,
-    actor: TenantActor,
+    actor: StaffSubject,
     dto: AddMemberDto,
     bookable: boolean,
   ): Promise<{ member: MemberView; email: MemberEmail }> {
@@ -396,16 +384,6 @@ export class MembersService {
       throw new NotFoundException('Member not found');
     }
     return row;
-  }
-
-  /**
-   * The Owner may act on their own membership (e.g. become bookable);
-   * otherwise the role table decides.
-   */
-  private assertCanActOn(actor: TenantActor, target: MemberRow) {
-    if (target.role === MemberRole.OWNER && actor.role === MemberRole.OWNER)
-      return;
-    assertCanManageRole(actor.role, target.role);
   }
 
   /** Enqueued only after commit: a rolled-back add never emails anyone. */

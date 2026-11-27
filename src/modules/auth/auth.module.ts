@@ -3,7 +3,6 @@ import { AuthenticationModule } from '@nestjs/authentication';
 import { env } from '../../config/env.js';
 import { EmailModule } from '../email/email.module.js';
 import { AccountKindGuard } from './account-kind.guard.js';
-import { PlatformAdminGuard } from './platform-admin.guard.js';
 import { AccountSetupService } from './account-setup.service.js';
 import { AuthRateLimiter } from './auth-rate-limiter.js';
 import { AuthTokensService } from './auth-tokens.service.js';
@@ -86,14 +85,12 @@ export const TOKEN_AUDIENCE = 'slotwise-api';
     CustomerAuthService,
     PasswordResetService,
     AccountKindGuard,
-    PlatformAdminGuard,
     UnverifiedAccountsCleanupService,
   ],
   exports: [
     AccountSetupService,
     AuthTokensService,
     AccountKindGuard,
-    PlatformAdminGuard,
     UsersRepository,
     UnverifiedAccountsCleanupService,
   ],

@@ -1,3 +1,4 @@
+import { Can } from '@nestjs/authorization';
 import {
   Body,
   Controller,
@@ -45,6 +46,7 @@ import type { SocialProvider } from './social/social-providers.js';
 /** The signed-in account (staff or customer). */
 @ApiTags('Me')
 @ApiBearerAuth()
+@Can.Anyone()
 @Controller('me')
 export class MeController {
   constructor(

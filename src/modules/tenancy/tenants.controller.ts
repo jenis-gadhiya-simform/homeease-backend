@@ -5,7 +5,11 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { TenantScoped } from './tenant.guard.js';
+import { TenantScoped } from './tenant-resolver.js';
+import {
+  ANY_MEMBER,
+  Roles,
+} from '../authorization/authorization.decorators.js';
 import { TenantsService } from './tenants.service.js';
 import { type UpdateTenantDto, updateTenantSchema } from './tenancy.schemas.js';
 import { MemberRole } from '../../generated/prisma/client.js';
@@ -22,13 +26,15 @@ export class TenantsController {
 
   @Get()
   @TenantScoped()
+  @Roles(...ANY_MEMBER)
   @ApiOperation({ summary: 'Business profile (any member)' })
   current() {
     return this.tenants.current();
   }
 
   @Patch()
-  @TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)
+  @TenantScoped()
+  @Roles(MemberRole.OWNER, MemberRole.MANAGER)
   @ApiOperation({
     summary: 'Update name, phone, city, address (Owner, Manager)',
     description:

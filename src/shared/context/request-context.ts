@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import type { Subject } from './subject.js';
 
 /** Which identity table an account lives in: staff-side `User` or `CustomerAccount`. */
 export const AccountKind = {
@@ -28,6 +29,8 @@ export interface RequestContextStore {
   requestId: string;
   ip: string | undefined;
   actor: Actor | undefined;
+  /** Who authorization sees (F03); set on routes that check a role or policy. */
+  subject?: Subject;
 }
 
 const storage = new AsyncLocalStorage<RequestContextStore>();
@@ -65,6 +68,20 @@ export const RequestContext = {
       throw new Error('RequestContext.setActor() called outside a request');
     }
     store.actor = actor;
+  },
+
+  /** The authorization subject (F03), or `undefined` before it is resolved. */
+  subject(): Subject | undefined {
+    return storage.getStore()?.subject;
+  },
+
+  /** Records the authorization subject for the rest of the request. */
+  setSubject(subject: Subject): void {
+    const store = storage.getStore();
+    if (!store) {
+      throw new Error('RequestContext.setSubject() called outside a request');
+    }
+    store.subject = subject;
   },
 };
 

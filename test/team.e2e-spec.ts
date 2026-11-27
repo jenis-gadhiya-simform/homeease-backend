@@ -216,10 +216,10 @@ describe('Team members & staff (e2e)', () => {
           role: 'MANAGER',
         })
         .expect(403);
-      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.code).toBe('ROLE_RANK_TOO_LOW');
     });
 
-    it('Receptionist and Staff cannot add anyone (403)', async () => {
+    it('Receptionist and Staff cannot add anyone (403), but can read the team', async () => {
       const { ownerToken } = await onboard();
       for (const role of ['RECEPTIONIST', 'STAFF']) {
         const member = await addActiveMember(ownerToken, {
@@ -235,7 +235,8 @@ describe('Team members & staff (e2e)', () => {
           })
           .expect(403);
         expect(res.body.error.code).toBe('FORBIDDEN');
-        await as(member.token).get('/members').expect(403);
+        // F03: every member reads the team (RBAC, any member role).
+        await as(member.token).get('/members').expect(200);
       }
     });
 

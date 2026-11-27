@@ -6,15 +6,15 @@ import { PublicTenantsController } from './public-tenants.controller.js';
 import { MembershipsRepository } from './repositories/memberships.repository.js';
 import { StaffRepository } from './repositories/staff.repository.js';
 import { TenantsRepository } from './repositories/tenants.repository.js';
-import { TenantGuard } from './tenant.guard.js';
+import { TenantResolver } from './tenant-resolver.js';
 import { TenantOnboardingService } from './tenant-onboarding.service.js';
 import { TenantsController } from './tenants.controller.js';
 import { TenantsService } from './tenants.service.js';
 
 /**
  * Tenancy & business onboarding (F01): businesses, the Owner membership,
- * `TenantGuard` (which business a request acts in) and the public profile.
- * Exports the guard and repositories for tenant-scoped features.
+ * `TenantResolver` (which business a request acts in, for F03) and the public profile.
+ * Exports the resolver and repositories for tenant-scoped features.
  */
 @Module({
   imports: [AuthModule, EmailModule],
@@ -27,12 +27,12 @@ import { TenantsService } from './tenants.service.js';
     TenantsRepository,
     MembershipsRepository,
     StaffRepository,
-    TenantGuard,
+    TenantResolver,
     TenantOnboardingService,
     TenantsService,
   ],
   exports: [
-    TenantGuard,
+    TenantResolver,
     TenantsRepository,
     MembershipsRepository,
     StaffRepository,

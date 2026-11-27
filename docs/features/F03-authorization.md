@@ -2,6 +2,8 @@
 
 **Phase:** 1 · **Modules:** 1.10 Authorization · **Depends on:** F01, F02, F04
 
+**Status:** 🚧 In progress — **v1** (2026-11-25): framework, RBAC on every existing route, member/staff/ownership policies · [Implementation summary](#implementation-summary-v1)
+
 ## Goal
 
 Decide **who can do what**, centrally, with `@nestjs/authorization`, never with scattered `if (role === ...)` checks. SlotWise uses **two authorization styles, and each endpoint uses exactly one of them**:
@@ -189,3 +191,74 @@ src/modules/authorization/
 
 - Startup check fails for a route with no authorization decorator or with both.
 - Removing a membership takes effect on the next request.
+
+## Implementation summary (v1)
+
+v1 builds the authorization framework and applies it to **every route that exists today** (F01, F02, F04, F15). The booking, payment, schedule, customer, file and platform-PII policies need endpoints that don't exist yet; each lands with its feature (F05, F07, F08, F10, F18, F19), on this framework.
+
+### What was built
+
+| Item                                                                                                                                                      | Status       | Where                                                                                          | Notes                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@nestjs/authorization` (global guard, deny by default)                                                                                                   | ✅           | `authorization/authorization.module.ts` (`AuthzModule`), `app.module.ts`                       | After `AuthModule` and `RateLimitModule`. `getUser` = `SubjectResolver`. Denials logged with policy/ability/subject role.                                        |
+| `Subject` type + builder                                                                                                                                  | ✅           | `shared/context/subject.ts`, `authorization/subject.resolver.ts`, `tenancy/tenant-resolver.ts` | Staff subject carries `staffId`. Stored in `RequestContext.subject()`; read from the DB per request.                                                             |
+| `@Roles(...)` (RBAC)                                                                                                                                      | ✅           | `authorization/authorization.decorators.ts`, `roles.policy.ts`                                 | `RolesPolicy.hasRole` reads the role only. `ANY_MEMBER`, `PLATFORM_ADMIN_ROLE`.                                                                                  |
+| `@Policy(PolicyClass, action)` (ABAC)                                                                                                                     | ✅           | `@UsePolicy(...)` in `authorization.decorators.ts`                                             | Typed like `@Can()`: a misspelt or record-only ability doesn't compile.                                                                                          |
+| `PolicyGuard` loads the record                                                                                                                            | ✅ (changed) | services + `authorization/decision.ts`                                                         | The guard runs the policy's route ability on the subject; the service loads the record and calls `enforce(policy.rule(...))` (see decisions).                    |
+| Startup check: exactly one of `@Public` / `@Roles` / `@Policy`                                                                                            | ✅           | `authorization/authorization-coverage.ts`                                                      | Also accepts `@Can.Anyone()`; checks tenant roles have `@TenantScoped()` and every tenant route declares a check. Fails startup listing each route.              |
+| RBAC on existing endpoints                                                                                                                                | ✅           | `admin-tenants`, `maintenance`, `tenants`, `members`, `staff` controllers                      | `PlatformAdminGuard` / `@PlatformAdminOnly()` and `@TenantScoped(...roles)` removed.                                                                             |
+| `GET /members` open to every member                                                                                                                       | ✅           | `members.controller.ts`                                                                        | As this spec's RBAC table says (F04 had Owner/Manager).                                                                                                          |
+| `MemberPolicy` (A8 role rank)                                                                                                                             | ✅           | `authorization/policies/member.policy.ts`                                                      | Replaces `team/team-roles.ts`. New code `ROLE_RANK_TOO_LOW`.                                                                                                     |
+| `StaffPolicy.update` (own calendar)                                                                                                                       | ✅           | `policies/staff.policy.ts`                                                                     | Uses `subject.staffId`.                                                                                                                                          |
+| `TenantPolicy.transferOwnership` + `POST /tenants/current/transfer-ownership`                                                                             | ✅           | `policies/tenant.policy.ts`, `team/ownership.{controller,service}.ts`                          | Owner only, password re-entered, target an active Manager who finished setup; one transaction, conditional role changes, audited `tenant.ownership_transferred`. |
+| A12 suspended tenant                                                                                                                                      | ✅           | `tenancy/tenant-resolver.ts`                                                                   | 403 `TENANT_SUSPENDED` on every tenant route (reads too, as F01 already did).                                                                                    |
+| A1–A7, A9–A11; `BookingPolicy`, `PaymentPolicy`, `SchedulePolicy`, `CustomerPolicy`, `FilePolicy`, `PlatformPiiPolicy`; list `scope()`; field-level views | ⏭️           | —                                                                                              | Their endpoints arrive with F05/F07/F08/F10/F18/F19. `Decision`/`notVisible()` and the subject (`staffId`, `accountId`, `breakGlass`) are ready for them.        |
+| Membership cache (≤ 60 s)                                                                                                                                 | ⏭️           | —                                                                                              | Not added: the membership read is one indexed query, and no cache means removal takes effect on the very next request.                                           |
+
+### Decisions that differ from the spec
+
+- **Route check in the guard, record check in the service.** `@nestjs/authorization`'s guard runs before pipes and can only answer a plain 403. Loading the record there would load it twice and answer 403 before a 404. So each ABAC policy has a **route ability** (`(subject) → boolean`, e.g. "may manage members at all") for the guard, and **record rules** returning a `Decision` with a stable code, enforced in the service after a tenant-scoped load. Rules stay pure functions, as the spec asks.
+- **`@UsePolicy()` instead of `@Policy()`** on routes: `@Policy()` is already the `@nestjs/authorization` decorator that marks policy classes.
+- **`@Can.Anyone()` is a fourth declaration** for routes any signed-in account may call (`/me/*`); the startup check accepts it instead of forcing a fake role list.
+- **A fourth subject kind, `user`**: a staff-side user on a route outside any business (e.g. an Owner calling `/admin/*`), so that request gets a 403 instead of a 401.
+- **The Subject type lives in `shared/context/subject.ts`** (with `RequestContext`, which stores it) rather than `authorization/subject.ts`. `roles.guard.ts` / `policy.guard.ts` aren't needed: the package's guard runs both.
+- **Member management stays Owner/Manager.** Rank alone (A8) would let a Receptionist (2) manage Staff (1); F04 says only Owners and Managers run the team, so `MemberPolicy.manage` needs rank ≥ Manager and the rank rule applies on top.
+- **Wrong password on transfer → 403 `REAUTHENTICATION_REQUIRED`** (as for changing a password), not 401, which clients read as "token expired". Bad targets → 422 `TRANSFER_TARGET_INVALID`.
+- **`TenantGuard` became `TenantResolver`** (`tenancy/tenant-resolver.ts`): the same rules, called by the subject resolver, because a route guard runs after the global authorization guard.
+
+### New scripts, env vars and dependencies
+
+- Dependency: `@nestjs/authorization` 0.1.4.
+- No new env vars or scripts. Error codes: `ROLE_RANK_TOO_LOW`, `TRANSFER_TARGET_INVALID`.
+- New endpoint: `POST /tenants/current/transfer-ownership` `{ memberId, password }` → `200 { owner, previousOwner }`.
+
+### Tests
+
+- Unit: `authorization/authorization.spec.ts` (guard wiring: RBAC table, RBAC loads no record, platform role, ABAC route ability, deny by default; startup check cases), `subject.resolver.spec.ts`, `policies/member.policy.spec.ts`, `policies/staff.policy.spec.ts`, `policies/tenant.policy.spec.ts`; `tenancy/tenant-resolver.spec.ts` replaces the guard spec; `team/team-roles.spec.ts` removed.
+- E2E: `test/authorization.e2e-spec.ts` (RBAC matrix for 6 endpoints × 6 callers, A8 over HTTP, removal applies next request, ownership transfer allow/deny, startup check sees every route). `test/team.e2e-spec.ts` updated: Manager adding a Manager → `ROLE_RANK_TOO_LOW`; Receptionist/Staff can read `GET /members`.
+- Final: unit **32 files, 198 tests passed**; e2e **13 files, 130 tests passed**; lint, format, typecheck and build clean. Manually checked: removing `@Can.Anyone()` from `MeController` stops startup naming all 5 routes.
+
+### Acceptance criteria
+
+| Criterion                                                                       | Status                  | How                                                                                                              |
+| ------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Table-driven e2e: each role gets 2xx or 403 on every RBAC endpoint              | ✅ (existing endpoints) | `authorization.e2e-spec.ts`; later RBAC endpoints add rows.                                                      |
+| RBAC never loads the target record before deciding                              | ✅                      | `authorization.spec.ts` spies on a repository; `RolesPolicy` has no dependencies.                                |
+| Unit tests per policy, allow + deny for A1–A12 with a fixed `now`               | ⏳                      | A8 and A12 done (+ staff/ownership rules); others wait for their policies.                                       |
+| Two Staff, same role: own booking 200, other's 404                              | ⏳                      | Needs bookings (F07). Same-role-different-answer is covered for calendars (`StaffPolicy`, unit + team e2e, 403). |
+| Customer cancel window 25 h / 23 h                                              | ⏳                      | F07.                                                                                                             |
+| Manager removes a Receptionist → 200; another Manager → 403 `ROLE_RANK_TOO_LOW` | ✅                      | Unit + e2e (204 No Content).                                                                                     |
+| Staff intake form vs ID document                                                | ⏳                      | F18.                                                                                                             |
+| Platform PII masked / break-glass                                               | ⏳                      | F19.                                                                                                             |
+| Startup check fails for no decorator or both                                    | ✅                      | Unit cases + manual run.                                                                                         |
+| Removing a membership takes effect on the next request                          | ✅                      | e2e (`NOT_A_MEMBER` on the next call).                                                                           |
+
+### Follow-ups for later features
+
+- **F05:** `SchedulePolicy.manage` (A1 own calendar, 404) for `/staff/:id/working-hours` and `/time-off`; `@Roles(OWNER, MANAGER)` on `/services`, `/holidays`, `PUT /staff/:id/services`.
+- **F07:** `BookingPolicy` (read/scope/create/reschedule/cancel/complete/waiveDeposit; A1–A5) with `scope()` → Prisma `where` for lists; tenant `cancellationWindowHours` / `staffEditPastHours` as environment attributes; the two-Staff and cancel-window e2e.
+- **F08:** `CustomerPolicy.viewContact` field-level (A9) in `CustomerView` / `BookingView`.
+- **F10:** `PaymentPolicy.pay` / `.refund` (A6, A7); `PUT /tenants/current/deposit-policy` `@Roles(OWNER)`.
+- **F18:** `FilePolicy` (A10).
+- **F19:** break-glass grants and `PlatformPiiPolicy` (A11).
+- Ownership transfer sends no email yet (F14 notifications).

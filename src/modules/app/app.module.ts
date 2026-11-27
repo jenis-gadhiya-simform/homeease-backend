@@ -10,6 +10,7 @@ import { SharedQueueModule } from '../../shared/queue/queue.module.js';
 import { SharedRedisModule } from '../../shared/redis/redis.module.js';
 import { AuditModule } from '../audit/audit.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { AuthzModule } from '../authorization/authorization.module.js';
 import { EmailModule } from '../email/email.module.js';
 import { HealthModule } from '../health/health.module.js';
 import { LoggingModule } from '../logger/logger.module.js';
@@ -40,6 +41,9 @@ import { env, isProduction } from '../../config/env.js';
     // Before RateLimitModule: authentication runs first, then the throttler.
     AuthModule,
     RateLimitModule,
+    // After both: @Roles() / @UsePolicy() checks run on the authenticated,
+    // throttled request (F03).
+    AuthzModule,
     EmailModule,
     AuditModule,
     TenancyModule,

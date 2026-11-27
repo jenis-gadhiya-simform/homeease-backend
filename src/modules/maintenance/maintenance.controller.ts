@@ -14,7 +14,8 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { PlatformAdminOnly } from '../auth/platform-admin.guard.js';
+import { Roles } from '../authorization/authorization.decorators.js';
+import { PLATFORM_ADMIN_ROLE } from '../../shared/context/request-context.js';
 import type { MaintenanceJob } from './maintenance.constants.js';
 import { MaintenanceScheduler } from './maintenance.scheduler.js';
 import { jobIdSchema, maintenanceJobSchema } from './maintenance.schemas.js';
@@ -22,7 +23,7 @@ import { jobIdSchema, maintenanceJobSchema } from './maintenance.schemas.js';
 /** Platform admin: see the housekeeping schedules and run a job now (F15). */
 @ApiTags('Admin')
 @ApiBearerAuth()
-@PlatformAdminOnly()
+@Roles(PLATFORM_ADMIN_ROLE)
 @Controller('admin/maintenance')
 export class MaintenanceController {
   constructor(private readonly scheduler: MaintenanceScheduler) {}

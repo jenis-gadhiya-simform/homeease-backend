@@ -13,7 +13,7 @@
 | [F00](./features/F00-platform-foundations.md)                  | Platform foundations                                                  | 0     | —         | ✅ v1               |
 | [F01](./features/F01-tenancy.md)                               | Tenancy & business onboarding                                         | 1     | 1.10      | ✅ v1               |
 | [F02](./features/F02-authentication.md)                        | Authentication (password, magic link, Google/Microsoft for customers) | 1     | —         | ✅ v2               |
-| [F03](./features/F03-authorization.md)                         | Authorization (RBAC and ABAC)                                         | 1     | 1.10      | Not started         |
+| [F03](./features/F03-authorization.md)                         | Authorization (RBAC and ABAC)                                         | 1     | 1.10      | 🚧 v1 (framework)   |
 | [F04](./features/F04-staff-and-membership.md)                  | Team members & staff                                                  | 1     | 1.10      | ✅ v1               |
 | [F05](./features/F05-catalog-and-schedules.md)                 | Services, hours, time off, holidays                                   | 1     | 1.12      | Not started         |
 | [F06](./features/F06-availability-search.md)                   | Availability (free-slot search)                                       | 1     | 1.6, 1.12 | Not started         |

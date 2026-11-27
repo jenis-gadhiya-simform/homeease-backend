@@ -143,6 +143,29 @@ export class MembershipsRepository {
     });
   }
 
+  /**
+   * Changes an ACTIVE membership's role only if it still has role `from`.
+   * Returns the updated member, or null when it changed in the meantime.
+   */
+  async changeRole(
+    tenantId: string,
+    membershipId: string,
+    from: MemberRole,
+    to: MemberRole,
+    tx: Tx,
+  ): Promise<MemberRow | null> {
+    const { count } = await tx.membership.updateMany({
+      where: {
+        id: membershipId,
+        tenantId,
+        role: from,
+        status: MembershipStatus.ACTIVE,
+      },
+      data: { role: to },
+    });
+    return count === 1 ? this.findById(tenantId, membershipId, tx) : null;
+  }
+
   async remove(tenantId: string, membershipId: string, tx: Tx) {
     await tx.membership.update({
       where: { id: membershipId, tenantId },
@@ -173,6 +196,7 @@ export class MembershipsRepository {
       select: {
         tenantId: true,
         role: true,
+        staffId: true,
         tenant: { select: { status: true } },
       },
     });

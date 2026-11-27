@@ -1,6 +1,5 @@
 import { HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import {
-  MemberRole,
   MembershipStatus,
   type Prisma,
 } from '../../generated/prisma/client.js';
@@ -12,7 +11,9 @@ import {
   StaffRepository,
 } from '../tenancy/repositories/staff.repository.js';
 import type { ListStaffQuery, UpdateStaffDto } from './team.schemas.js';
-import { tenantActor } from './team-roles.js';
+import { requireStaffSubject } from '../authorization/current-subject.js';
+import { enforce } from '../authorization/decision.js';
+import { StaffPolicy } from '../authorization/policies/staff.policy.js';
 
 export interface StaffView {
   id: string;
@@ -40,10 +41,11 @@ export class StaffService {
     private readonly tenantPrisma: TenantPrismaService,
     private readonly staff: StaffRepository,
     private readonly audit: AuditService,
+    private readonly policy: StaffPolicy,
   ) {}
 
   async list(query: ListStaffQuery): Promise<StaffView[]> {
-    const { tenantId } = tenantActor();
+    const { tenantId } = requireStaffSubject();
     const rows = await this.tenantPrisma.run(tenantId, (tx) =>
       this.staff.list(tenantId, { active: query.active }, tx),
     );
@@ -52,27 +54,16 @@ export class StaffService {
 
   /**
    * Owner and Manager: display name and `active` of any calendar. A member
-   * may rename their own calendar, nothing else. Deactivating hides it from
-   * the public page at once.
+   * may rename their own calendar, nothing else (`StaffPolicy`).
+   * Deactivating hides it from the public page at once.
    */
   async update(id: string, dto: UpdateStaffDto): Promise<StaffView> {
-    const actor = tenantActor();
+    const actor = requireStaffSubject();
     return this.tenantPrisma.run(actor.tenantId, async (tx) => {
       const current = await this.staff.findById(actor.tenantId, id, tx);
       if (!current) throw new NotFoundException('Staff not found');
 
-      const manager =
-        actor.role === MemberRole.OWNER || actor.role === MemberRole.MANAGER;
-      const own = current.membership?.userId === actor.userId;
-      if (!manager && !(own && dto.active === undefined)) {
-        throw new DomainError(
-          HttpStatus.FORBIDDEN,
-          ErrorCode.Forbidden,
-          own
-            ? 'Only an Owner or Manager can activate or deactivate a calendar'
-            : 'You can only change your own calendar',
-        );
-      }
+      enforce(this.policy.updateCalendar(actor, current, dto));
       if (
         dto.active === true &&
         current.membership?.status !== MembershipStatus.ACTIVE

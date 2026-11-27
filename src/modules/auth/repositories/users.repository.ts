@@ -62,6 +62,15 @@ export class UsersRepository {
     });
   }
 
+  /** For re-entering a password (e.g. ownership transfer, F03): the hash, or null. */
+  async findPasswordHash(id: string): Promise<string | null> {
+    const row = await this.prisma.user.findFirst({
+      where: { id, status: UserStatus.ACTIVE },
+      select: { passwordHash: true },
+    });
+    return row?.passwordHash ?? null;
+  }
+
   async findProfile(id: string, db: Db = this.prisma) {
     return db.user.findUnique({
       where: { id },

@@ -52,3 +52,13 @@ export const updateStaffSchema = z
 export type UpdateStaffDto = z.infer<typeof updateStaffSchema>;
 
 export const idParamSchema = z.uuid();
+
+export const transferOwnershipSchema = z
+  .object({
+    /** Membership id of the Manager who becomes Owner. */
+    memberId: z.uuid(),
+    /** The Owner's current password, re-entered. */
+    password: z.string().min(1).max(200),
+  })
+  .strict();
+export type TransferOwnershipDto = z.infer<typeof transferOwnershipSchema>;

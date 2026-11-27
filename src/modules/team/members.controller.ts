@@ -24,7 +24,13 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import type { StaffPrincipal } from '../auth/auth.types.js';
-import { TenantScoped } from '../tenancy/tenant.guard.js';
+import { TenantScoped } from '../tenancy/tenant-resolver.js';
+import {
+  ANY_MEMBER,
+  Roles,
+  UsePolicy,
+} from '../authorization/authorization.decorators.js';
+import { MemberPolicy } from '../authorization/policies/member.policy.js';
 import { MembersService } from './members.service.js';
 import {
   type AddMemberDto,
@@ -35,7 +41,6 @@ import {
   type UpdateMemberDto,
   updateMemberSchema,
 } from './team.schemas.js';
-import { MemberRole } from '../../generated/prisma/client.js';
 
 const memberExample = {
   id: '0193…',
@@ -59,12 +64,13 @@ const memberExample = {
 @ApiForbiddenResponse({
   description: 'NOT_A_MEMBER, TENANT_SUSPENDED or FORBIDDEN (role)',
 })
-@TenantScoped(MemberRole.OWNER, MemberRole.MANAGER)
+@TenantScoped()
 @Controller('members')
 export class MembersController {
   constructor(private readonly members: MembersService) {}
 
   @Post()
+  @UsePolicy(MemberPolicy, 'manage')
   @ApiOperation({
     summary: 'Add a member',
     description:
@@ -87,6 +93,7 @@ export class MembersController {
   }
 
   @Get()
+  @Roles(...ANY_MEMBER)
   @ApiOperation({
     summary: 'List members',
     description:
@@ -100,6 +107,7 @@ export class MembersController {
   }
 
   @Patch(':id')
+  @UsePolicy(MemberPolicy, 'manage')
   @ApiOperation({
     summary: 'Change role and/or bookable',
     description:
@@ -117,6 +125,7 @@ export class MembersController {
   }
 
   @Delete(':id')
+  @UsePolicy(MemberPolicy, 'manage')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Remove a member',
@@ -132,6 +141,7 @@ export class MembersController {
   }
 
   @Post(':id/resend-setup')
+  @UsePolicy(MemberPolicy, 'manage')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Email a pending member a new set-password link',

@@ -6,7 +6,13 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
-import { TenantScoped } from '../tenancy/tenant.guard.js';
+import { TenantScoped } from '../tenancy/tenant-resolver.js';
+import {
+  ANY_MEMBER,
+  Roles,
+  UsePolicy,
+} from '../authorization/authorization.decorators.js';
+import { StaffPolicy } from '../authorization/policies/staff.policy.js';
 import { StaffService } from './staff.service.js';
 import {
   idParamSchema,
@@ -36,6 +42,7 @@ export class StaffController {
 
   @Get()
   @TenantScoped()
+  @Roles(...ANY_MEMBER)
   @ApiOperation({ summary: 'List calendars (any member)' })
   @ApiOkResponse({ schema: { example: { items: [staffExample] } } })
   async list(@Query({ schema: listStaffQuerySchema }) query: ListStaffQuery) {
@@ -44,6 +51,7 @@ export class StaffController {
 
   @Patch(':id')
   @TenantScoped()
+  @UsePolicy(StaffPolicy, 'update')
   @ApiOperation({
     summary: 'Rename or (de)activate a calendar',
     description:
